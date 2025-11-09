@@ -1,31 +1,43 @@
-from src.text.text_loader import TextLoader
-from src.text.text_annotator import TextAnnotator
-from src.tts.tts_engine import TTSEngine
-from src.tts.audio_mixer import AudioMixer
 import json
+from src.tts.azure_tts_engine import AzureTTSEngine
+from src.text.text_annotator import TextAnnotator
+from src.tts.audio_mixer import AudioMixer
 
 class AudiobookGenerator:
-    def __init__(self, text_path, ref_voice):
-        self.loader = TextLoader(text_path)
-        self.annotator = TextAnnotator()
-        self.tts = TTSEngine()
-        self.mixer = AudioMixer()
-        self.tts.set_voice(ref_voice)
+    def __init__(self, input_text_path, azure_key, azure_region):
+        self.text_annotator = TextAnnotator()
+        self.tts = AzureTTSEngine(azure_key, azure_region, voice="en-US-AriaNeural")
+        self.input_text_path = input_text_path
 
-    def run(self, output_path="output.wav"):
-        text = self.loader.clean(self.loader.load())
-        annotated = self.annotator.annotate(text)
+    def run(self, output_path="data/output.wav"):
+        # Читаем книгу
+        with open(self.input_text_path, "r", encoding="utf-8") as f:
+            text = f.read()
 
-        # 📁 сохраняем аннотированный текст в JSON
-        annotated_path = "data/annotated_text.json"
-        with open(annotated_path, "w", encoding="utf-8") as f:
-            json.dump(annotated, f, indent=2, ensure_ascii=False)
+        # Аннотируем (эмоции, темп и т.д.)
+        annotated = self.text_annotator.annotate(text)
+        with open("data/annotated_text.json", "w", encoding="utf-8") as f:
+            json.dump(annotated, f, ensure_ascii=False, indent=2)
+        print("[💾] Annotated text saved to data/annotated_text.json")
 
-        print(f"[💾] Annotated text saved to {annotated_path}")
+        # Синтез каждой фразы
+        for i, seg in enumerate(annotated):
+            emotion = seg.get("emotion", "narration-professional")
+            rate = seg.get("rate", "+0%")
+            pitch = seg.get("pitch", "+0Hz")
 
-        # # 🔊 продолжаем генерацию речи
-        # segments = self.tts.synthesize(annotated)
-        # mixed = self.mixer.mix(segments, annotated)
-        # self.mixer.export(mixed, output_path)
+            out_file = f"data/segment_{i}.wav"
+            self.tts.synthesize(seg["text"], out_file, emotion=emotion)
 
-        # print(f"[✔] Audiobook saved as {output_path}")
+        print("[✔] Audiobook generation completed.")
+
+        segment_paths = [f"data/segment_{i}.wav" for i in range(len(annotated))]
+
+        # Инициализация микшера
+        mixer = AudioMixer(sample_rate=24000)
+
+        # Склейка всех сегментов
+        mixed = mixer.mix(segment_paths, annotations=annotated)
+
+        # Экспорт объединённого файла
+        mixer.export(mixed, "data/output.wav")
