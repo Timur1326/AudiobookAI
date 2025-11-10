@@ -7,7 +7,6 @@ class AzureTTSEngine:
         self.speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
         self.speech_config.speech_synthesis_voice_name = voice
 
-        # ✅ Поддерживаемые стили для данного голоса
         self.valid_styles = {
             "en-US-AriaNeural": [
                 "chat", "customerservice", "narration-professional",
@@ -18,7 +17,6 @@ class AzureTTSEngine:
             ]
         }
 
-        # 🎭 Маппинг эмоций модели → (Azure стиль, скорость, тон, выраженность)
         self.emotion_map = {
             "anger": ("angry", "+10%", "+2Hz", "1.3"),
             "disgust": ("unfriendly", "-5%", "-2Hz", "1.1"),
@@ -27,7 +25,6 @@ class AzureTTSEngine:
             "neutral": ("narration-professional", "+0%", "+0Hz", "1.0"),
             "sadness": ("sad", "-10%", "-3Hz", "1.2"),
             "surprise": ("excited", "+12%", "+3Hz", "1.3"),
-            # fallback для неизвестных эмоций
             "default": ("narration-professional", "+0%", "+0Hz", "1.0")
         }
         self.speech_config.set_speech_synthesis_output_format(
@@ -40,7 +37,6 @@ class AzureTTSEngine:
             print(f"[⚠️] Skipping empty text segment.")
             return
 
-        # 🔄 Определяем стиль, скорость, тон и степень выраженности
         style, rate, pitch, styledegree = self.emotion_map.get(emotion, self.emotion_map["default"])
 
         safe_text = html.escape(text)
@@ -58,7 +54,6 @@ class AzureTTSEngine:
         #     </speak>
         #     """
         # else:
-            # ✅ Используем express-as + prosody + styledegree
         ssml = f"""
         <speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis'
                xmlns:mstts='http://www.w3.org/2001/mstts'
@@ -76,17 +71,14 @@ class AzureTTSEngine:
         print(f"[🗣️] Synthesizing → emotion='{emotion}', style='{style}', "
               f"rate={rate}, pitch={pitch}, styledegree={styledegree}")
 
-        # ⚙️ Конфигурация синтеза
         audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
         synthesizer = speechsdk.SpeechSynthesizer(
             speech_config=self.speech_config,
             audio_config=audio_config
         )
 
-        # ▶️ Синтез
         result = synthesizer.speak_ssml_async(ssml).get()
 
-        # 📦 Проверка результата
         if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
             print(f"[✔] Audio saved: {output_path}")
         else:

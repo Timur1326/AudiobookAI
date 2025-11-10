@@ -14,13 +14,11 @@ class AudiobookGenerator:
         with open(self.input_text_path, "r", encoding="utf-8") as f:
             text = f.read()
 
-        # Аннотируем (эмоции, темп и т.д.)
         annotated = self.text_annotator.annotate(text)
         with open("data/annotated_text.json", "w", encoding="utf-8") as f:
             json.dump(annotated, f, ensure_ascii=False, indent=2)
-        print("[💾] Annotated text saved to data/annotated_text.json")
+        print("Annotated text saved to data/annotated_text.json")
 
-        # Синтез каждой фразы
         for i, seg in enumerate(annotated):
             emotion = seg.get("emotion", "narration-professional")
             rate = seg.get("rate", "+0%")

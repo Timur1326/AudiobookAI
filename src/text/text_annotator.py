@@ -1,24 +1,25 @@
 from transformers import pipeline
 import spacy
 from spacy.language import Language
+import re
 
 @Language.component("quote_sentence_boundary")
 def quote_sentence_boundary(doc):
     """
-    Кастомный компонент: помогает разбивать диалоги с кавычками,
-    но не создаёт кавычки как отдельные предложения.
+    Кастомный компонент: корректно разбивает диалоги с кавычками.
+    Не создаёт кавычки как отдельные предложения.
     """
     for i, token in enumerate(doc[:-2]):
-        # Если есть вопрос/восклицание перед кавычкой и новой репликой — делаем разрыв
         if token.text in ['?', '!']:
             next_token = doc[i + 1]
             next2_token = doc[i + 2]
             if next_token.text in ['"', '”'] and next2_token.text[0].isupper():
                 doc[next2_token.i].is_sent_start = True
 
-        # Если кавычка закрывается и потом идёт заглавная — это новое предложение
-        if token.text in ['"', '”'] and token.nbor(1).text[0].isupper():
-            doc[token.nbor(1).i].is_sent_start = True
+        if token.text in ['"', '”'] and token.i + 1 < len(doc):
+            next_token = token.nbor(1)
+            if next_token.text and next_token.text[0].isupper():
+                doc[next_token.i].is_sent_start = True
 
     return doc
 
@@ -41,23 +42,30 @@ class TextAnnotator:
 
     def annotate(self, text: str):
         doc = self.nlp(text)
+        sentences = [re.sub(r'\s+', ' ', s.text.strip()) for s in doc.sents]
         annotated = []
+        TRASH_TOKENS = {'"', '“', '”', "'", "-", "–", "—"}
 
-        for sent in doc.sents:
-            cleaned_text = sent.text.strip()
-
-            # 🔥 Игнорируем пустые и "мусорные" предложения (одни кавычки, тире и т.п.)
-            if not cleaned_text or cleaned_text in ['"', '“', '”', "'", "-", "–"]:
+        for i, sent_text in enumerate(sentences):
+            if not sent_text or sent_text in TRASH_TOKENS:
+                continue
+            if not re.search(r'[A-Za-z0-9]', sent_text):
                 continue
 
-            result = self.emotion_model(cleaned_text)[0]
+            prev_sent = sentences[i - 1] if i > 0 else ""
+            next_sent = sentences[i + 1] if i + 1 < len(sentences) else ""
+            context_text = f"{prev_sent} {sent_text} {next_sent}".strip()
+
+            result = self.emotion_model(context_text)[0]
             emotion = result["label"].lower().strip()
             score = result["score"]
 
             if score < 0.4 or emotion not in self.supported_emotions:
                 emotion = "neutral"
+            if emotion == "disgust":
+                emotion = "neutral"
 
-            last_char = cleaned_text[-1] if cleaned_text else ""
+            last_char = sent_text[-1] if sent_text else ""
             if last_char in [".", "!", "?"]:
                 pause = 0.6
             elif last_char in [",", ";", ":"]:
@@ -66,12 +74,38 @@ class TextAnnotator:
                 pause = 0.25
 
             annotated.append({
-                "text": cleaned_text,
+                "text": sent_text,
                 "emotion": emotion,
                 "pause": round(pause, 2),
                 "rate": 1.0,
                 "pitch": 0
             })
 
-        print(f"[📝] Annotated {len(annotated)} sentences (cleaned).")
+        smoothed = []
+        for i, ann in enumerate(annotated):
+            current = ann["emotion"]
+
+            prev_e = annotated[i - 1]["emotion"] if i > 0 else None
+            next_e = annotated[i + 1]["emotion"] if i + 1 < len(annotated) else None
+
+            if prev_e == next_e and prev_e is not None:
+                smoothed_emotion = prev_e
+
+            elif current == "neutral" and prev_e == next_e and prev_e in {"joy", "sadness", "anger", "surprise"}:
+                smoothed_emotion = prev_e
+
+            elif current == "neutral" and prev_e in {"joy", "sadness", "anger", "surprise"}:
+                smoothed_emotion = prev_e
+            elif current == "neutral" and next_e in {"joy", "sadness", "anger", "surprise"}:
+                smoothed_emotion = next_e
+            else:
+                smoothed_emotion = current
+
+            ann["emotion"] = smoothed_emotion
+            smoothed.append(ann)
+
+        annotated = smoothed
+        print(f"Applied emotional smoothing ({len(annotated)} sentences).")
+
+        print(f"Annotated {len(annotated)} sentences with context window.")
         return annotated
