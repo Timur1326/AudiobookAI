@@ -34,7 +34,7 @@ class AzureTTSEngine:
 
     def synthesize(self, text: str, output_path: str, emotion="neutral"):
         if not text.strip():
-            print(f"[⚠️] Skipping empty text segment.")
+            print(f"Skipping empty text segment.")
             return
 
         style, rate, pitch, styledegree = self.emotion_map.get(emotion, self.emotion_map["default"])
@@ -68,7 +68,7 @@ class AzureTTSEngine:
         </speak>
         """
 
-        print(f"[🗣️] Synthesizing → emotion='{emotion}', style='{style}', "
+        print(f"Synthesizing → emotion='{emotion}', style='{style}', "
               f"rate={rate}, pitch={pitch}, styledegree={styledegree}")
 
         audio_config = speechsdk.audio.AudioOutputConfig(filename=output_path)
@@ -80,9 +80,9 @@ class AzureTTSEngine:
         result = synthesizer.speak_ssml_async(ssml).get()
 
         if result.reason == speechsdk.ResultReason.SynthesizingAudioCompleted:
-            print(f"[✔] Audio saved: {output_path}")
+            print(f"Audio saved: {output_path}")
         else:
             cancellation = result.cancellation_details
-            print("[❌] Speech synthesis canceled:", cancellation.reason)
+            print("Speech synthesis canceled:", cancellation.reason)
             if cancellation.reason == speechsdk.CancellationReason.Error:
                 print("Error details:", cancellation.error_details)

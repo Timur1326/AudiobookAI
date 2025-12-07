@@ -10,7 +10,7 @@ class AudiobookGenerator:
         self.input_text_path = input_text_path
 
     def run(self, output_path="data/output.wav"):
-        # Читаем книгу
+
         with open(self.input_text_path, "r", encoding="utf-8") as f:
             text = f.read()
 
@@ -19,23 +19,20 @@ class AudiobookGenerator:
             json.dump(annotated, f, ensure_ascii=False, indent=2)
         print("Annotated text saved to data/annotated_text.json")
 
-        for i, seg in enumerate(annotated):
-            emotion = seg.get("emotion", "narration-professional")
-            rate = seg.get("rate", "+0%")
-            pitch = seg.get("pitch", "+0Hz")
-
-            out_file = f"data/segment_{i}.wav"
-            self.tts.synthesize(seg["text"], out_file, emotion=emotion)
-
-        print("[✔] Audiobook generation completed.")
-
-        segment_paths = [f"data/segment_{i}.wav" for i in range(len(annotated))]
-
-        # Инициализация микшера
-        mixer = AudioMixer(sample_rate=24000)
-
-        # Склейка всех сегментов
-        mixed = mixer.mix(segment_paths, annotations=annotated)
-
-        # Экспорт объединённого файла
-        mixer.export(mixed, "data/output.wav")
+        # for i, seg in enumerate(annotated):
+        #     emotion = seg.get("emotion", "narration-professional")
+        #     rate = seg.get("rate", "+0%")
+        #     pitch = seg.get("pitch", "+0Hz")
+        #
+        #     out_file = f"data/segment_{i}.wav"
+        #     self.tts.synthesize(seg["text"], out_file, emotion=emotion)
+        #
+        # print("Audiobook generation completed.")
+        #
+        # segment_paths = [f"data/segment_{i}.wav" for i in range(len(annotated))]
+        #
+        # mixer = AudioMixer(sample_rate=24000)
+        #
+        # mixed = mixer.mix(segment_paths, annotations=annotated)
+        # # glue together
+        # mixer.export(mixed, "data/output.wav")

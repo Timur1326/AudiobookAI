@@ -13,10 +13,10 @@ def quote_sentence_boundary(doc):
         if token.text in ['?', '!']:
             next_token = doc[i + 1]
             next2_token = doc[i + 2]
-            if next_token.text in ['"', '”'] and next2_token.text[0].isupper():
+            if next_token.text in ['"', '"'] and next2_token.text[0].isupper():
                 doc[next2_token.i].is_sent_start = True
 
-        if token.text in ['"', '”'] and token.i + 1 < len(doc):
+        if token.text in ['"', '"'] and token.i + 1 < len(doc):
             next_token = token.nbor(1)
             if next_token.text and next_token.text[0].isupper():
                 doc[next_token.i].is_sent_start = True
@@ -44,7 +44,7 @@ class TextAnnotator:
         doc = self.nlp(text)
         sentences = [re.sub(r'\s+', ' ', s.text.strip()) for s in doc.sents]
         annotated = []
-        TRASH_TOKENS = {'"', '“', '”', "'", "-", "–", "—"}
+        TRASH_TOKENS = {'"', '"', '"', "'", "-", "–", "—"}
 
         for i, sent_text in enumerate(sentences):
             if not sent_text or sent_text in TRASH_TOKENS:
@@ -52,6 +52,7 @@ class TextAnnotator:
             if not re.search(r'[A-Za-z0-9]', sent_text):
                 continue
 
+            # Context window
             prev_sent = sentences[i - 1] if i > 0 else ""
             next_sent = sentences[i + 1] if i + 1 < len(sentences) else ""
             context_text = f"{prev_sent} {sent_text} {next_sent}".strip()
@@ -61,8 +62,6 @@ class TextAnnotator:
             score = result["score"]
 
             if score < 0.4 or emotion not in self.supported_emotions:
-                emotion = "neutral"
-            if emotion == "disgust":
                 emotion = "neutral"
 
             last_char = sent_text[-1] if sent_text else ""
@@ -81,31 +80,5 @@ class TextAnnotator:
                 "pitch": 0
             })
 
-        smoothed = []
-        for i, ann in enumerate(annotated):
-            current = ann["emotion"]
-
-            prev_e = annotated[i - 1]["emotion"] if i > 0 else None
-            next_e = annotated[i + 1]["emotion"] if i + 1 < len(annotated) else None
-
-            if prev_e == next_e and prev_e is not None:
-                smoothed_emotion = prev_e
-
-            elif current == "neutral" and prev_e == next_e and prev_e in {"joy", "sadness", "anger", "surprise"}:
-                smoothed_emotion = prev_e
-
-            elif current == "neutral" and prev_e in {"joy", "sadness", "anger", "surprise"}:
-                smoothed_emotion = prev_e
-            elif current == "neutral" and next_e in {"joy", "sadness", "anger", "surprise"}:
-                smoothed_emotion = next_e
-            else:
-                smoothed_emotion = current
-
-            ann["emotion"] = smoothed_emotion
-            smoothed.append(ann)
-
-        annotated = smoothed
-        print(f"Applied emotional smoothing ({len(annotated)} sentences).")
-
-        print(f"Annotated {len(annotated)} sentences with context window.")
+        print(f"[📝] Annotated {len(annotated)} sentences with context window.")
         return annotated
