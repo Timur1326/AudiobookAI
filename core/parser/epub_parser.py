@@ -182,9 +182,9 @@ def save_to_json(book: Book, path: str) -> None:
                 "paragraphs": [
                     {
                         "text":       p.text,
-                        "type":       p.type,
+                        "type":       p.type,        # narration / dialogue
                         "chapter_id": p.chapter_id,
-                        "speaker":    p.speaker,
+                        "speaker":    p.speaker,     # Alice / Rabbit / None
                         "scene":      p.scene,
                     }
                     for p in ch.paragraphs
@@ -195,7 +195,7 @@ def save_to_json(book: Book, path: str) -> None:
     }
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f"Сохранено: {path}")
+    print(f"Сохранено: {path}  ({len(book.chapters)} глав)")
 
 
 def load_from_json(path: str) -> Book:
