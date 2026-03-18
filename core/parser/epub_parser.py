@@ -58,9 +58,16 @@ def get_chapter_title(element) -> str:
 def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
     soup = BeautifulSoup(html_content, "html.parser")
 
+    # Drop-cap images: заменяем на alt-текст перед удалением
+    for img in soup.find_all("img"):
+        alt = img.get("alt", "")
+        if len(alt) == 1 and alt.isalpha():
+            img.replace_with(alt)
+        else:
+            img.decompose()
+
     # Удаляем всё лишнее
-    for tag in soup.find_all(["img", "figure", "svg",
-                               "script", "style", "table"]):
+    for tag in soup.find_all(["figure", "svg", "script", "style", "table"]):
         tag.decompose()
     for tag in soup.find_all("span", class_="x-ebookmaker-pageno"):
         tag.decompose()
@@ -68,6 +75,7 @@ def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
     chapters: List[Chapter] = []
     current: Chapter = None
     chapter_id = start_id
+    drop_cap_prefix = ""  # буква из drop-cap figleft
 
     body = soup.find("body")
     if not body:
@@ -100,19 +108,30 @@ def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
         elif el.name == "div" and "sidenote" in classes:
             continue
 
+        # ── Drop-cap: figleft/figright с одной буквой ──
+        elif el.name == "div" and any(c in classes for c in ["figleft", "figright"]):
+            letter = el.get_text(strip=True)
+            if len(letter) == 1 and letter.isalpha():
+                drop_cap_prefix = letter
+            continue
+
         # ── Текстовые блоки ──────────────────────────────
         elif el.name in ["p", "div"]:
             if current is None:
                 continue
 
             # Пропускаем служебные классы
-            skip_classes = ["figleft", "figright", "sidenote",
-                            "center", "chapter", "footnote"]
+            skip_classes = ["sidenote", "center", "chapter", "footnote"]
             if any(c in classes for c in skip_classes):
                 continue
 
             text = el.get_text(separator=" ", strip=True)
             text = clean_text(text)
+
+            # Прицепляем drop-cap если есть
+            if drop_cap_prefix:
+                text = drop_cap_prefix + text
+                drop_cap_prefix = ""
 
             if len(text) < 10:
                 continue
