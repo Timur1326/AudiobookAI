@@ -113,6 +113,7 @@ def split_paragraph_by_quotes(
             relevant_quotes.append((local_start, local_end, speaker))
 
     if not relevant_quotes:
+        para.type = "narration"
         return [para]
 
     relevant_quotes.sort(key=lambda x: x[0])
@@ -154,7 +155,10 @@ def split_paragraph_by_quotes(
             scene=para.scene
         ))
 
-    return parts if parts else [para]
+    if not parts:
+        para.type = "narration"
+        return [para]
+    return parts
 
 
 def _clean_speaker(name: str) -> str:

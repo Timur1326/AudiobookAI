@@ -5,7 +5,7 @@ from typing import List, Optional
 @dataclass
 class Paragraph:
     text: str
-    type: str  # "text" | "dialogue" | "heading"
+    type: str  # "dialogue" | "narration"
     chapter_id: int
     speaker: Optional[str] = None  # who says this (from BookNLP)
     scene: Optional[str] = None  # background scene type
