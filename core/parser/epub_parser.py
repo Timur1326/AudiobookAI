@@ -10,9 +10,6 @@ from typing import List
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from core.models import Book, Chapter, Paragraph
 
-# ──────────────────────────────────────────
-# Файлы которые пропускаем
-# ──────────────────────────────────────────
 
 SKIP_FILENAMES = ["toc", "wrap", "cover", "copyright",
                   "title", "colophon", "index", "nav"]
@@ -20,9 +17,7 @@ SKIP_FILENAMES = ["toc", "wrap", "cover", "copyright",
 SKIP_CONTENT   = ["Project Gutenberg", "END OF THE PROJECT",
                   "gutenberg.org"]
 
-# ──────────────────────────────────────────
-# Вспомогательные функции
-# ──────────────────────────────────────────
+
 
 def should_skip(filename: str, raw: str) -> bool:
     if any(kw in filename.lower() for kw in SKIP_FILENAMES):
@@ -51,14 +46,29 @@ def get_chapter_title(element) -> str:
     return text
 
 
-# ──────────────────────────────────────────
-# Извлечение текста из одного HTML файла
-# ──────────────────────────────────────────
+def extract_h2_chapter_title(element) -> str:
+
+    raw = element.get_text(separator="\n", strip=True)
+    lines = [l.strip() for l in raw.splitlines() if l.strip()]
+    for line in reversed(lines):
+        if re.search(r"chapter", line, re.IGNORECASE):
+            return clean_text(line)
+    return clean_text(lines[-1]) if lines else ""
+
+
+def is_chapter_heading(element) -> bool:
+    if element.name == "div" and "chapter" in element.get("class", []):
+        return True
+    if element.name in ("h2", "h3") and re.search(
+        r"chapter", element.get_text(), re.IGNORECASE
+    ):
+        return True
+    return False
+
 
 def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
     soup = BeautifulSoup(html_content, "html.parser")
 
-    # Drop-cap images: заменяем на alt-текст перед удалением
     for img in soup.find_all("img"):
         alt = img.get("alt", "")
         if len(alt) == 1 and alt.isalpha():
@@ -66,7 +76,6 @@ def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
         else:
             img.decompose()
 
-    # Удаляем всё лишнее
     for tag in soup.find_all(["figure", "svg", "script", "style", "table"]):
         tag.decompose()
     for tag in soup.find_all("span", class_="x-ebookmaker-pageno"):
@@ -75,7 +84,7 @@ def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
     chapters: List[Chapter] = []
     current: Chapter = None
     chapter_id = start_id
-    drop_cap_prefix = ""  # буква из drop-cap figleft
+    drop_cap_prefix = ""
 
     body = soup.find("body")
     if not body:
@@ -87,15 +96,15 @@ def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
 
         classes = el.get("class", [])
 
-        # ── Новая глава ──────────────────────────────────
-        if el.name == "div" and "chapter" in classes:
-            heading = el.get_text(strip=True)
-
-            # Сохраняем предыдущую
+        if is_chapter_heading(el):
             if current and current.paragraphs:
                 chapters.append(current)
 
-            title = get_chapter_title(el)
+            if el.name in ("h2", "h3"):
+                title = extract_h2_chapter_title(el)
+            else:
+                title = get_chapter_title(el)
+
             current = Chapter(
                 id=chapter_id,
                 title=title,
@@ -104,31 +113,26 @@ def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
             )
             chapter_id += 1
 
-        # ── Пропускаем sidenote (уже в заголовке) ────────
         elif el.name == "div" and "sidenote" in classes:
             continue
 
-        # ── Drop-cap: figleft/figright с одной буквой ──
         elif el.name == "div" and any(c in classes for c in ["figleft", "figright"]):
             letter = el.get_text(strip=True)
             if len(letter) == 1 and letter.isalpha():
                 drop_cap_prefix = letter
             continue
 
-        # ── Текстовые блоки ──────────────────────────────
         elif el.name in ["p", "div"]:
             if current is None:
                 continue
 
-            # Пропускаем служебные классы
-            skip_classes = ["sidenote", "center", "chapter", "footnote"]
+            skip_classes = ["sidenote", "center", "chapter", "footnote", "caption"]
             if any(c in classes for c in skip_classes):
                 continue
 
             text = el.get_text(separator=" ", strip=True)
             text = clean_text(text)
 
-            # Прицепляем drop-cap если есть
             if drop_cap_prefix:
                 text = drop_cap_prefix + text
                 drop_cap_prefix = ""
@@ -148,9 +152,6 @@ def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
     return chapters
 
 
-# ──────────────────────────────────────────
-# Главная функция
-# ──────────────────────────────────────────
 
 def parse_epub(file_path: str) -> Book:
     epub_book = epub.read_epub(file_path)
@@ -181,9 +182,6 @@ def parse_epub(file_path: str) -> Book:
     return book
 
 
-# ──────────────────────────────────────────
-# JSON
-# ──────────────────────────────────────────
 
 def save_to_json(book: Book, path: str) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -203,7 +201,7 @@ def save_to_json(book: Book, path: str) -> None:
                         "text":       p.text,
                         "type":       p.type,        # narration / dialogue
                         "chapter_id": p.chapter_id,
-                        "speaker":    p.speaker,     # Alice / Rabbit / None
+                        "speaker":    p.speaker,
                         "scene":      p.scene,
                     }
                     for p in ch.paragraphs
