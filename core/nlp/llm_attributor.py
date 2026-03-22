@@ -186,8 +186,10 @@ def run_zeroshot(
 
     # ── Сохраняем ────────────────────────────────────────────────────────────
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    tmp = output_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(data, ensure_ascii=True, indent=2))
+    os.replace(tmp, output_path)
 
     print(f"\nСохранено: {output_path}")
 
@@ -200,23 +202,36 @@ if __name__ == "__main__":
     parser.add_argument("--chapter", type=int, default=None, help="Индекс одной главы")
     parser.add_argument("--all-chapters", action="store_true", help="Обработать все главы")
     parser.add_argument("--chunk-size", type=int, default=CHUNK_SIZE)
+    parser.add_argument("--input",  default=None, help="Входной JSON (по умолчанию parsed_final.json)")
+    parser.add_argument("--output", default=None, help="Выходной JSON (по умолчанию parsed_llm_zeroshot.json)")
     args = parser.parse_args()
 
     if not args.all_chapters and args.chapter is None:
         parser.error("Укажи --chapter N или --all-chapters")
 
     base = f"storage/uploads/{args.book}"
-    input_path = f"{base}/parsed_final.json"
-    output_path = f"{base}/parsed_llm_zeroshot.json"
+    input_path = args.input  or f"{base}/parsed_final.json"
+    output_path = args.output or f"{base}/parsed_llm_zeroshot.json"
 
     if args.all_chapters:
         with open(input_path, encoding="utf-8") as f:
-            total_chapters = len(json.load(f)["chapters"])
+            data = json.load(f)
+        total_chapters = len(data["chapters"])
         for idx in range(total_chapters):
+            # Пропускаем главы где LLM уже отработал
+            paras = data["chapters"][idx]["paragraphs"]
+            dialogues = [p for p in paras if p["type"] == "dialogue"]
+            done = sum(1 for p in dialogues if p.get("speaker_llm_zeroshot") is not None)
+            if dialogues and done >= len(dialogues) * 0.8:
+                print(f"\nГЛАВА {idx}/{total_chapters-1} — пропускаем (уже обработана, {done}/{len(dialogues)})")
+                continue
             print(f"\n{'='*50}")
             print(f"ГЛАВА {idx}/{total_chapters - 1}")
             print(f"{'='*50}")
             src = output_path if idx > 0 and os.path.exists(output_path) else input_path
             run_zeroshot(src, output_path, chapter_idx=idx, chunk_size=args.chunk_size)
+            # Перечитываем data после сохранения
+            with open(output_path, encoding="utf-8") as f:
+                data = json.load(f)
     else:
         run_zeroshot(input_path, output_path, chapter_idx=args.chapter, chunk_size=args.chunk_size)

@@ -15,18 +15,14 @@ PRONOUNS = {
 
 
 def clean_narrator(text: str) -> str:
-    """Убирает висячие кавычки и лишние символы в narrator частях."""
     text = re.sub(r'\s*[""\']\s*$', '', text)
     text = re.sub(r'^\s*[""\']\s*', '', text)
     return text.strip()
 
 
 def build_character_names(entities_path: str) -> Dict[int, str]:
-    """
-    Строит словарь char_id -> лучшее имя персонажа.
-    Приоритет: PROP (собственное имя) > NOM (нарицательное) > PRON (местоимение)
-    """
-    entities = pd.read_csv(entities_path, sep="\t")
+
+    entities = pd.read_csv(entities_path, sep="\t", quoting=3, on_bad_lines="skip")
     persons = entities[entities["cat"] == "PER"].copy()
 
     priority = {"PROP": 0, "NOM": 1, "PRON": 2}
@@ -37,7 +33,6 @@ def build_character_names(entities_path: str) -> Dict[int, str]:
         prop    = row["prop"]
         text    = str(row["text"]).strip()
 
-        # Пропускаем местоимения при построении словаря имён
         if text.lower() in {p.lower() for p in PRONOUNS}:
             continue
 
@@ -57,17 +52,12 @@ def resolve_speaker(
     char_id: int,
     char_names: Dict[int, str]
 ) -> str:
-    """
-    Если mention_phrase — местоимение, заменяем на имя из char_names.
-    Иначе возвращаем очищенный mention_phrase.
-    """
+
     phrase = mention_phrase.strip()
 
     if phrase.lower() in {p.lower() for p in PRONOUNS}:
-        # Это местоимение — ищем имя по char_id
         if char_id in char_names:
             return char_names[char_id]
-        # Имя не найдено — возвращаем как есть
         return phrase
 
     # Не местоимение — просто чистим
@@ -82,9 +72,7 @@ def split_paragraph_by_quotes(
     para_char_start: int,
     char_names: Dict[int, str],
 ) -> List[Paragraph]:
-    """
-    Разбивает один параграф на части: narration / dialogue.
-    """
+
     para_len = len(para_text)
     para_char_end = para_char_start + para_len
 
@@ -172,7 +160,7 @@ def split_chapter_paragraphs(
     paragraphs: List[Paragraph],
     quotes_df: pd.DataFrame,
     tokens_df: pd.DataFrame,
-    char_names: Dict[int, str],  # НОВЫЙ параметр
+    char_names: Dict[int, str],
 ) -> List[Paragraph]:
     """
     Разбивает все параграфы главы.
@@ -182,7 +170,7 @@ def split_chapter_paragraphs(
     texts = [p.text for p in paragraphs]
     for text in texts:
         offsets.append(pos)
-        pos += len(text) + 2  # +2 для \n\n
+        pos += len(text) + 2
 
     result: List[Paragraph] = []
 
@@ -193,7 +181,7 @@ def split_chapter_paragraphs(
             quotes_df=quotes_df,
             tokens_df=tokens_df,
             para_char_start=offsets[i],
-            char_names=char_names,  # передаём
+            char_names=char_names,
         )
         result.extend(parts)
 

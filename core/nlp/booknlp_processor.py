@@ -12,9 +12,9 @@ class BookNLPProcessor:
             "pipeline": "entity,quote,coref",
             "model": "small"
         }
-        print("Загружаем BookNLP...")
+        print("Load BookNLP...")
         self.nlp = BookNLP("en", model_params)
-        print("BookNLP готов!")
+        print("BookNLP is ready!")
 
     def process_chapter(
         self,
@@ -25,27 +25,22 @@ class BookNLPProcessor:
 
         os.makedirs(work_dir, exist_ok=True)
 
-        # 1. Сохраняем текст
         txt_path = os.path.join(work_dir, f"{chapter_id}.txt")
         full_text = "\n\n".join(p.text for p in chapter.paragraphs)
         with open(txt_path, "w", encoding="utf-8") as f:
             f.write(full_text)
 
-        # 2. Запускаем BookNLP
         self.nlp.process(txt_path, work_dir, chapter_id)
 
-        # 3. Читаем результаты
         quotes = pd.read_csv(
             os.path.join(work_dir, f"{chapter_id}.quotes"), sep="\t"
         )
         tokens = pd.read_csv(
             os.path.join(work_dir, f"{chapter_id}.tokens"), sep="\t"
         )
-        # НОВОЕ: читаем entities для разрешения местоимений
         entities_path = os.path.join(work_dir, f"{chapter_id}.entities")
         char_names = build_character_names(entities_path)
 
-        # 4. Разбиваем параграфы
         new_paragraphs = split_chapter_paragraphs(
             chapter.paragraphs, quotes, tokens, char_names
         )

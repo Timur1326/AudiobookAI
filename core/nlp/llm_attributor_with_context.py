@@ -248,8 +248,10 @@ def run_with_context(
 
     # ── Сохраняем ────────────────────────────────────────────────────────────
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    tmp = output_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(data, ensure_ascii=True, indent=2))
+    os.replace(tmp, output_path)
 
     print(f"\nSaved: {output_path}")
 
@@ -258,19 +260,22 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("book", help="Name of the book (folder in storage/uploads)")
+    parser.add_argument("book", help="Имя книги, например: alice, pride_prejudice")
     parser.add_argument("--chapter", type=int, default=None, help="Индекс одной главы")
     parser.add_argument("--all-chapters", action="store_true", help="Обработать все главы")
     parser.add_argument("--chunk-size", type=int, default=CHUNK_SIZE)
+    parser.add_argument("--input",    default=None, help="Входной JSON (по умолчанию parsed_final.json)")
+    parser.add_argument("--zeroshot", default=None, help="Zero-shot JSON для сравнения")
+    parser.add_argument("--output",   default=None, help="Выходной JSON (по умолчанию parsed_llm_context.json)")
     args = parser.parse_args()
 
     if not args.all_chapters and args.chapter is None:
         parser.error("Укажи --chapter N или --all-chapters")
 
     base = f"storage/uploads/{args.book}"
-    input_path  = f"{base}/parsed_final.json"
-    zeroshot_path = f"{base}/parsed_llm_zeroshot.json"
-    output_path = f"{base}/parsed_llm_context.json"
+    input_path    = args.input    or f"{base}/parsed_final.json"
+    zeroshot_path = args.zeroshot or f"{base}/parsed_llm_zeroshot.json"
+    output_path   = args.output   or f"{base}/parsed_llm_context.json"
 
     if args.all_chapters:
         with open(input_path, encoding="utf-8") as f:
