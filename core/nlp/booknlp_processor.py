@@ -60,5 +60,5 @@ class BookNLPProcessor:
             )
             narrations = sum(1 for p in book.chapters[i].paragraphs if p.type == "narration")
             dialogues  = sum(1 for p in book.chapters[i].paragraphs if p.type == "dialogue")
-            print(f"  📝 narration: {narrations}  💬 dialogue: {dialogues}")
+            print(f"  narration: {narrations}  💬 dialogue: {dialogues}")
         return book

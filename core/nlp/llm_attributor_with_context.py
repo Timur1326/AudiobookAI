@@ -1,11 +1,6 @@
 """
 LLM attribution with character context.
 
-Отличие от llm_attributor.py (zero-shot):
-- Перед обработкой извлекаем всех уникальных персонажей из parsed_final.json
-  (по полю speaker по всей книге) и добавляем в system prompt.
-- Результат пишет в поле speaker_llm_context.
-- Статистика: сравнение с BookNLP и с zero-shot (parsed_llm_zeroshot.json).
 """
 
 import json
@@ -48,7 +43,6 @@ Output format:
 
 
 def extract_characters(data: dict) -> list[str]:
-    """Собрать всех уникальных персонажей по полю speaker по всей книге."""
     seen: set[str] = set()
     for chapter in data["chapters"]:
         for para in chapter["paragraphs"]:
@@ -73,7 +67,7 @@ def _build_user_message(chunk: list[dict[str, Any]], offset: int) -> str:
 def _parse_response(content: str) -> dict[int, str | None]:
     match = re.search(r"\[.*\]", content, re.DOTALL)
     if not match:
-        raise ValueError("JSON-массив не найден в ответе")
+        raise ValueError("JSON-array not found in response")
     items = json.loads(match.group())
     return {item["index"]: item.get("speaker") for item in items}
 
@@ -98,9 +92,9 @@ def attribute_chunk(
             return _parse_response(raw)
 
         except (ValueError, json.JSONDecodeError) as e:
-            print(f"    [попытка {attempt}/{RETRY_LIMIT}] невалидный JSON: {e}")
+            print(f"    [attempt {attempt}/{RETRY_LIMIT}] dont valid JSON: {e}")
             if attempt == RETRY_LIMIT:
-                print("    Пропускаем чанк — возвращаем null для всех реплик")
+                print("    Skip this chunk due to repeated parsing errors.")
                 return {
                     offset + i: None
                     for i, p in enumerate(chunk)
@@ -124,7 +118,7 @@ def _compare(label: str, dialogue_indices: list[int], paragraphs: list[dict],
         and paragraphs[i].get(field_b) is not None
     ]
     if not both:
-        print(f"{label_a} vs {label_b}: нет данных для сравнения")
+        print(f"{label_a} vs {label_b}: no metrics for comparison")
         return
 
     match = sum(
@@ -133,9 +127,9 @@ def _compare(label: str, dialogue_indices: list[int], paragraphs: list[dict],
         == paragraphs[i][field_b].strip().lower()
     )
     print(f"\n{label_a} vs {label_b}:")
-    print(f"  Оба дали ответ:  {len(both)}")
-    print(f"  Совпадений:      {match}  ({match / len(both) * 100:.1f}%)")
-    print(f"  Расхождений:     {len(both) - match}")
+    print(f"  Both gave response:  {len(both)}")
+    print(f"  Matches:      {match}  ({match / len(both) * 100:.1f}%)")
+    print(f"  Discrepancies:     {len(both) - match}")
 
     shown = 0
     for i in both:
@@ -156,7 +150,7 @@ def run_with_context(
 ) -> None:
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY не задан в .env")
+        raise ValueError("ANTHROPIC_API_KEY not entered in .env")
 
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -173,13 +167,12 @@ def run_with_context(
             i: p.get("speaker_llm_zeroshot")
             for i, p in enumerate(zs_paras)
         }
-        print(f"Zero-shot данные загружены: {zeroshot_path}")
+        print(f"Zero-shot data is loaded: {zeroshot_path}")
     else:
-        print(f"Zero-shot файл не найден ({zeroshot_path}) — сравнение с zero-shot пропускается")
+        print(f"Zero-shot not found file ({zeroshot_path}) ")
 
-    # Извлекаем персонажей по всей книге
     characters = extract_characters(data)
-    print(f"\nИзвлечено персонажей: {len(characters)}")
+    print(f"\nCharacters extracted: {len(characters)}")
     print(f"  {', '.join(characters)}\n")
 
     system_prompt = _build_system_prompt(characters)
@@ -188,26 +181,24 @@ def run_with_context(
     paragraphs = chapter["paragraphs"]
     total = len(paragraphs)
 
-    print(f"Глава [{chapter_idx}]: {chapter['title']}")
-    print(f"Параграфов: {total}  |  чанков: {(total + chunk_size - 1) // chunk_size}")
-    print(f"Модель: {MODEL}\n")
+    print(f"Chapter [{chapter_idx}]: {chapter['title']}")
+    print(f"Paragraphs: {total}  |  chunks: {(total + chunk_size - 1) // chunk_size}")
+    print(f"Model: {MODEL}\n")
 
-    # Инициализируем поле + копируем zero-shot для статистики
     for i, p in enumerate(paragraphs):
         p["speaker_llm_context"] = None
         if zeroshot_paragraphs:
             p["speaker_llm_zeroshot"] = zeroshot_paragraphs.get(i)
 
     dialogue_indices = [i for i, p in enumerate(paragraphs) if p["type"] == "dialogue"]
-    print(f"Диалоговых параграфов: {len(dialogue_indices)}\n")
+    print(f"Dialogue paragraphs: {len(dialogue_indices)}\n")
 
-    # Обрабатываем чанками
     for chunk_start in range(0, total, chunk_size):
         chunk = paragraphs[chunk_start: chunk_start + chunk_size]
         chunk_num = chunk_start // chunk_size + 1
         total_chunks = (total + chunk_size - 1) // chunk_size
 
-        print(f"Чанк {chunk_num}/{total_chunks}  (параграфы {chunk_start}–{chunk_start + len(chunk) - 1})")
+        print(f"Chunk {chunk_num}/{total_chunks}  (paragraphs {chunk_start}–{chunk_start + len(chunk) - 1})")
 
         attributions = attribute_chunk(client, chunk, offset=chunk_start, system_prompt=system_prompt)
 
@@ -215,14 +206,13 @@ def run_with_context(
             paragraphs[idx]["speaker_llm_context"] = speaker
 
         attributed = sum(1 for v in attributions.values() if v is not None)
-        print(f"  → атрибутировано {attributed}/{len(attributions)} реплик")
+        print(f"  attributed {attributed}/{len(attributions)} replies")
 
         if chunk_start + chunk_size < total:
             time.sleep(0.5)
 
-    # ── Статистика ────────────────────────────────────────────────────────────
     print("\n" + "=" * 50)
-    print("СТАТИСТИКА")
+    print("STATISTICS:")
     print("=" * 50)
 
     total_dialogue = len(dialogue_indices)
@@ -233,9 +223,9 @@ def run_with_context(
         1 for i in dialogue_indices if paragraphs[i].get("speaker") is not None
     )
 
-    print(f"Всего диалогов:                  {total_dialogue}")
-    print(f"BookNLP атрибутировал:           {booknlp_attributed}")
-    print(f"LLM with-context атрибутировал:  {ctx_attributed}")
+    print(f"Total dialogue:                  {total_dialogue}")
+    print(f"BookNLP attributed:           {booknlp_attributed}")
+    print(f"LLM with-context attributed:  {ctx_attributed}")
 
     _compare("", dialogue_indices, paragraphs,
              "speaker", "BookNLP",
@@ -260,17 +250,17 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("book", help="Имя книги, например: alice, pride_prejudice")
-    parser.add_argument("--chapter", type=int, default=None, help="Индекс одной главы")
-    parser.add_argument("--all-chapters", action="store_true", help="Обработать все главы")
+    parser.add_argument("book", help="Name of book example: alice, pride_prejudice")
+    parser.add_argument("--chapter", type=int, default=None, help="Index of chapter ")
+    parser.add_argument("--all-chapters", action="store_true", help="Process all chapters")
     parser.add_argument("--chunk-size", type=int, default=CHUNK_SIZE)
-    parser.add_argument("--input",    default=None, help="Входной JSON (по умолчанию parsed_final.json)")
-    parser.add_argument("--zeroshot", default=None, help="Zero-shot JSON для сравнения")
-    parser.add_argument("--output",   default=None, help="Выходной JSON (по умолчанию parsed_llm_context.json)")
+    parser.add_argument("--input",    default=None, help="Input JSON (default: parsed_final.json)")
+    parser.add_argument("--zeroshot", default=None, help="JSON to compare")
+    parser.add_argument("--output",   default=None, help="Output JSON (default: parsed_llm_context.json)")
     args = parser.parse_args()
 
     if not args.all_chapters and args.chapter is None:
-        parser.error("Укажи --chapter N или --all-chapters")
+        parser.error("Enter --chapter N or --all-chapters")
 
     base = f"storage/uploads/{args.book}"
     input_path    = args.input    or f"{base}/parsed_final.json"

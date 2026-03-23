@@ -1,9 +1,7 @@
 """
 LLM zero-shot dialogue attribution.
 
-Берёт параграфы чанками по N, отправляет в Claude Haiku,
-просит определить speaker для каждой реплики (dialogue).
-Результат пишет в поле speaker_llm_zeroshot.
+Take paragraphs in chunks, ask LLM to identify dialogue paragraphs and their speakers.
 """
 
 import json
@@ -53,7 +51,7 @@ def _build_user_message(chunk: list[dict[str, Any]], offset: int) -> str:
 def _parse_response(content: str) -> dict[int, str | None]:
     match = re.search(r"\[.*\]", content, re.DOTALL)
     if not match:
-        raise ValueError("JSON-массив не найден в ответе")
+        raise ValueError("JSON array not found in response")
 
     items = json.loads(match.group())
     return {item["index"]: item.get("speaker") for item in items}
@@ -78,9 +76,9 @@ def attribute_chunk(
             return _parse_response(raw)
 
         except (ValueError, json.JSONDecodeError) as e:
-            print(f"    [попытка {attempt}/{RETRY_LIMIT}] невалидный JSON: {e}")
+            print(f"    [attempt {attempt}/{RETRY_LIMIT}] dont valid JSON: {e}")
             if attempt == RETRY_LIMIT:
-                print("    Пропускаем чанк — возвращаем null для всех реплик")
+                print("    Skipping this chunk due to repeated parsing errors.")
                 return {
                     offset + i: None
                     for i, p in enumerate(chunk)
@@ -113,22 +111,22 @@ def run_zeroshot(
     paragraphs = chapter["paragraphs"]
     total = len(paragraphs)
 
-    print(f"Глава [{chapter_idx}]: {chapter['title']}")
-    print(f"Параграфов: {total}  |  чанков: {(total + chunk_size - 1) // chunk_size}")
-    print(f"Модель: {MODEL}\n")
+    print(f"Chapter [{chapter_idx}]: {chapter['title']}")
+    print(f"Paragraphs: {total}  |  chunks: {(total + chunk_size - 1) // chunk_size}")
+    print(f"Model: {MODEL}\n")
 
     for p in paragraphs:
         p["speaker_llm_zeroshot"] = None
 
     dialogue_indices = [i for i, p in enumerate(paragraphs) if p["type"] == "dialogue"]
-    print(f"Диалоговых параграфов: {len(dialogue_indices)}\n")
+    print(f"Dialogue paragraphs: {len(dialogue_indices)}\n")
 
     for chunk_start in range(0, total, chunk_size):
         chunk = paragraphs[chunk_start: chunk_start + chunk_size]
         chunk_num = chunk_start // chunk_size + 1
         total_chunks = (total + chunk_size - 1) // chunk_size
 
-        print(f"Чанк {chunk_num}/{total_chunks}  (параграфы {chunk_start}–{chunk_start + len(chunk) - 1})")
+        print(f"Chunks {chunk_num}/{total_chunks}  (paragraphs {chunk_start}–{chunk_start + len(chunk) - 1})")
 
         attributions = attribute_chunk(client, chunk, offset=chunk_start)
 
@@ -136,13 +134,13 @@ def run_zeroshot(
             paragraphs[idx]["speaker_llm_zeroshot"] = speaker
 
         attributed = sum(1 for v in attributions.values() if v is not None)
-        print(f"  → атрибутировано {attributed}/{len(attributions)} реплик")
+        print(f"  Attributed {attributed}/{len(attributions)} replies")
 
         if chunk_start + chunk_size < total:
             time.sleep(0.5)
 
     print("\n" + "=" * 50)
-    print("СТАТИСТИКА")
+    print("Statistics:")
     print("=" * 50)
 
     total_dialogue = len(dialogue_indices)
@@ -166,15 +164,15 @@ def run_zeroshot(
         == paragraphs[i]["speaker_llm_zeroshot"].strip().lower()
     )
 
-    print(f"Всего диалогов:              {total_dialogue}")
-    print(f"BookNLP атрибутировал:       {booknlp_attributed}")
-    print(f"LLM zero-shot атрибутировал: {llm_attributed}")
-    print(f"Оба дали ответ:              {len(both)}")
-    print(f"Совпадений:                  {match}  ({match/len(both)*100:.1f}% от обоих)" if both else "Совпадений: —")
-    print(f"Расхождений:                 {len(both) - match}")
+    print(f"Total dialogue:              {total_dialogue}")
+    print(f"BookNLP attributed:       {booknlp_attributed}")
+    print(f"LLM zero-shot attributed: {llm_attributed}")
+    print(f"Both gave response:              {len(both)}")
+    print(f"Matches:                  {match}  ({match/len(both)*100:.1f}% от обоих)" if both else "Совпадений: —")
+    print(f"Discrepancies:                 {len(both) - match}")
 
     if both:
-        print("\nПримеры расхождений:")
+        print("\nExample of discrepancies:")
         shown = 0
         for i in both:
             if paragraphs[i]["speaker"].strip().lower() != paragraphs[i]["speaker_llm_zeroshot"].strip().lower():
@@ -184,7 +182,6 @@ def run_zeroshot(
                 if shown >= 5:
                     break
 
-    # ── Сохраняем ────────────────────────────────────────────────────────────
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     tmp = output_path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -198,16 +195,16 @@ if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("book", help="Имя книги, например: alice, pride_prejudice")
-    parser.add_argument("--chapter", type=int, default=None, help="Индекс одной главы")
-    parser.add_argument("--all-chapters", action="store_true", help="Обработать все главы")
+    parser.add_argument("book", help="Name of book , example: alice, pride_prejudice")
+    parser.add_argument("--chapter", type=int, default=None, help="Index of chapter")
+    parser.add_argument("--all-chapters", action="store_true", help="Process all chapters")
     parser.add_argument("--chunk-size", type=int, default=CHUNK_SIZE)
-    parser.add_argument("--input",  default=None, help="Входной JSON (по умолчанию parsed_final.json)")
-    parser.add_argument("--output", default=None, help="Выходной JSON (по умолчанию parsed_llm_zeroshot.json)")
+    parser.add_argument("--input",  default=None, help="Enter input JSON (default: parsed_final.json)")
+    parser.add_argument("--output", default=None, help="Exit output JSON (default: parsed_llm_zeroshot.json)")
     args = parser.parse_args()
 
     if not args.all_chapters and args.chapter is None:
-        parser.error("Укажи --chapter N или --all-chapters")
+        parser.error("Enter --chapter N or --all-chapters")
 
     base = f"storage/uploads/{args.book}"
     input_path = args.input  or f"{base}/parsed_final.json"
@@ -218,19 +215,17 @@ if __name__ == "__main__":
             data = json.load(f)
         total_chapters = len(data["chapters"])
         for idx in range(total_chapters):
-            # Пропускаем главы где LLM уже отработал
             paras = data["chapters"][idx]["paragraphs"]
             dialogues = [p for p in paras if p["type"] == "dialogue"]
             done = sum(1 for p in dialogues if p.get("speaker_llm_zeroshot") is not None)
             if dialogues and done >= len(dialogues) * 0.8:
-                print(f"\nГЛАВА {idx}/{total_chapters-1} — пропускаем (уже обработана, {done}/{len(dialogues)})")
+                print(f"\nChapter {idx}/{total_chapters-1} — skip ({done}/{len(dialogues)})")
                 continue
             print(f"\n{'='*50}")
-            print(f"ГЛАВА {idx}/{total_chapters - 1}")
+            print(f"Chapter {idx}/{total_chapters - 1}")
             print(f"{'='*50}")
             src = output_path if idx > 0 and os.path.exists(output_path) else input_path
             run_zeroshot(src, output_path, chapter_idx=idx, chunk_size=args.chunk_size)
-            # Перечитываем data после сохранения
             with open(output_path, encoding="utf-8") as f:
                 data = json.load(f)
     else:

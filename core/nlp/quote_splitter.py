@@ -14,13 +14,11 @@ from pathlib import Path
 
 import spacy
 
-# Закрытые кавычки: "текст"
 QUOTE_RE = re.compile(r'["\u201c](.*?)["\u201d]', re.DOTALL)
 
-# Незакрытая кавычка до конца строки: ..."текст до конца
 UNCLOSED_QUOTE_RE = re.compile(r'["\u201c\\"](.*?)$', re.DOTALL)
 
-nlp = None  # загружаем лениво
+nlp = None
 
 
 def get_nlp():
