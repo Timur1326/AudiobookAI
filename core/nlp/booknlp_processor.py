@@ -12,9 +12,9 @@ class BookNLPProcessor:
             "pipeline": "entity,quote,coref",
             "model": "small"
         }
-        print("Load BookNLP...")
+        print("Load BookNLP")
         self.nlp = BookNLP("en", model_params)
-        print("BookNLP is ready!")
+        print("BookNLP is ready")
 
     def process_chapter(
         self,

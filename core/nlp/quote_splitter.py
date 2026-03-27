@@ -138,11 +138,9 @@ def _needs_splitting(para: dict) -> bool:
     if not closed_matches and not unclosed_match:
         return False
 
-    # Narration с любыми кавычками — разбиваем
     if para["type"] == "narration":
         return True
 
-    # Dialogue где кавычки занимают меньше 85% текста (есть attribution снаружи)
     if para["type"] == "dialogue" and closed_matches:
         quoted_len = sum(len(m.group(1)) for m in closed_matches)
         return quoted_len < len(text) * 0.85
@@ -151,7 +149,6 @@ def _needs_splitting(para: dict) -> bool:
 
 
 def collect_speakers(data: dict) -> set[str]:
-    """Собрать известных спикеров — только реальные имена персонажей."""
     speakers = set()
     for ch in data["chapters"]:
         for p in ch["paragraphs"]:
@@ -159,7 +156,6 @@ def collect_speakers(data: dict) -> set[str]:
             if not s:
                 continue
             s = s.strip()
-            # Фильтруем мусор: только строки из букв/пробелов, длина 2-30
             if 2 <= len(s) <= 30 and re.match(r"^[A-Za-z][A-Za-z '\-]+$", s):
                 speakers.add(s)
     return speakers
