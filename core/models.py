@@ -5,17 +5,17 @@ from typing import List, Optional
 @dataclass
 class Paragraph:
     text: str
-    type: str  # "dialogue" | "narration"
+    type: str
     chapter_id: int
-    speaker: Optional[str] = None  # who says this (from BookNLP)
-    scene: Optional[str] = None  # background scene type
+    speaker: Optional[str] = None
+    scene: Optional[str] = None
 
 
 @dataclass
 class Chapter:
     id: int
     title: str
-    chapter_type: str  # "chapter" | "preface" | "introduction" | "epilogue"
+    chapter_type: str
     paragraphs: List[Paragraph] = field(default_factory=list)
 
 
@@ -24,7 +24,7 @@ class Character:
     id: int
     name: str
     mentions: int
-    voice_id: Optional[str] = None  # assigned TTS voice
+    voice_id: Optional[str] = None
 
 
 @dataclass

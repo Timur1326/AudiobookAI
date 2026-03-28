@@ -155,7 +155,7 @@ def synthesize_chapter(
     output_dir = book_dir / "audio" / engine / f"chapter_{chapter['id']:02d}"
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    segments: list[Path] = []
+    segments: list[tuple[Path, str]] = []  # (path, para_type)
 
     for i, para in enumerate(paragraphs):
         text = para.get("text", "").strip()
@@ -165,10 +165,11 @@ def synthesize_chapter(
         speaker = para.get("speaker_ground_truth") or para.get("speaker")
         voice_id = get_voice(speaker, voice_map, narrator_voice) if use_voice_map else narrator_voice
         out_file = output_dir / f"{i:04d}.mp3"
+        para_type = para.get("type", "narration")
 
         if out_file.exists() and out_file.stat().st_size > 0:
             print(f"  [{i+1}/{len(paragraphs)}] skip")
-            segments.append(out_file)
+            segments.append((out_file, para_type))
             continue
 
         label = f"({speaker})" if speaker else "(narrator)"
@@ -176,7 +177,7 @@ def synthesize_chapter(
 
         try:
             tts.synthesize(text=text, voice_id=voice_id, output_path=out_file)
-            segments.append(out_file)
+            segments.append((out_file, para_type))
         except Exception as e:
             print(f"    ERROR: {e}")
             continue
@@ -187,11 +188,23 @@ def synthesize_chapter(
         print("No audio segments were generated.")
         return None
 
+    # Pause durations depending on paragraph type transitions
+    PAUSE = {
+        ("narration",  "narration"):  200,
+        ("narration",  "dialogue"):   400,
+        ("dialogue",   "narration"):  300,
+        ("dialogue",   "dialogue"):   150,
+    }
+    DEFAULT_PAUSE = 300
+
     print("\nMerging audio files...")
     combined = AudioSegment.empty()
-    pause = AudioSegment.silent(duration=400)
-    for seg in segments:
-        combined += AudioSegment.from_mp3(seg) + pause
+    for idx, (seg, curr_type) in enumerate(segments):
+        combined += AudioSegment.from_mp3(seg)
+        if idx < len(segments) - 1:
+            next_type = segments[idx + 1][1]
+            pause_ms = PAUSE.get((curr_type, next_type), DEFAULT_PAUSE)
+            combined += AudioSegment.silent(duration=pause_ms)
 
     final_path = book_dir / "audio" / engine / f"chapter_{chapter['id']:02d}.mp3"
     combined.export(str(final_path), format="mp3")
