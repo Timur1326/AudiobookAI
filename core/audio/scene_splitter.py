@@ -30,7 +30,9 @@ Change scene only when characters clearly move to a different physical place.
 For each scene return:
 - scene_id: integer starting from 0
 - name: short scene name (2-4 words)
-- location: physical place description (2-5 words, English)
+- location: ambient sound description of the place (2-5 words, English).
+    Think: what would a microphone placed here record?
+    via location i will generate ambient sounds, so be specific about the place and time of day if relevant 
 - start_paragraph: index of first paragraph (inclusive)
 - end_paragraph: index of last paragraph (inclusive)
 
