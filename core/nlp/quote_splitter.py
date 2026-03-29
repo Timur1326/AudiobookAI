@@ -1,6 +1,5 @@
 """
-Post-processing: разбивает смешанные параграфы (dialogue внутри narration)
-на отдельные куски используя regex для кавычек и spaCy NER для спикера.
+Post-processing: split paragraphs that contain multiple quotes or mixed narration/dialogue into separate paragraphs.
 
 Запуск:
     python -m core.nlp.quote_splitter alice
@@ -29,22 +28,16 @@ def get_nlp():
 
 
 def find_speaker(context: str, known_speakers: set[str]) -> str | None:
-    """
-    Найти спикера в тексте attribution.
-    1. Сначала ищем среди известных персонажей книги (точное совпадение)
-    2. Затем spaCy NER — любая PERSON сущность
-    """
+
     if not context.strip():
         return None
 
     context_lower = context.lower()
 
-    # Быстрый поиск среди известных персонажей
     for name in known_speakers:
         if name.lower() in context_lower:
             return name
 
-    # spaCy NER как fallback
     doc = get_nlp()(context)
     for ent in doc.ents:
         if ent.label_ == "PERSON":
@@ -54,14 +47,10 @@ def find_speaker(context: str, known_speakers: set[str]) -> str | None:
 
 
 def split_paragraph(para: dict, known_speakers: set[str]) -> list[dict]:
-    """
-    Разбить параграф на части по кавычкам.
-    Возвращает список параграфов (исходный если разбивать не нужно).
-    """
+
     text = para["text"]
     matches = list(QUOTE_RE.finditer(text))
 
-    # Если нет закрытых кавычек — ищем незакрытую
     if not matches:
         m = UNCLOSED_QUOTE_RE.search(text)
         if not m:
@@ -88,27 +77,22 @@ def split_paragraph(para: dict, known_speakers: set[str]) -> list[dict]:
         cursor = m.end()
         after_peek = text[cursor:cursor + 100]
 
-        # Текст до кавычки → narration
         if len(before) > 3:
             parts.append(_make_para(para, before, "narration", None))
 
-        # Кавычка → dialogue, ищем спикера в before и after
         if len(quote) > 1:
             speaker = (
                 find_speaker(before, known_speakers) or
                 find_speaker(after_peek, known_speakers)
             )
-            # Если параграф уже был dialogue с известным спикером — сохраняем
             if not speaker and para["type"] == "dialogue":
                 speaker = para.get("speaker_ground_truth") or para.get("speaker")
             parts.append(_make_para(para, quote, "dialogue", speaker))
 
-    # Остаток после последней кавычки → narration
     after = text[cursor:].strip().strip('",;: ')
     if len(after) > 3:
         parts.append(_make_para(para, after, "narration", None))
 
-    # Если разбивка не дала смысла — возвращаем оригинал
     if len(parts) <= 1:
         return [para]
 
@@ -129,7 +113,6 @@ def _make_para(source: dict, text: str, ptype: str, speaker: str | None) -> dict
 
 
 def _needs_splitting(para: dict) -> bool:
-    """True если параграф содержит кавычки которые стоит разбить."""
     text = para["text"]
 
     closed_matches = list(QUOTE_RE.finditer(text))
@@ -163,7 +146,7 @@ def collect_speakers(data: dict) -> set[str]:
 
 def process_book(data: dict, chapter_idx: int | None, preview: bool) -> dict:
     known_speakers = collect_speakers(data)
-    print(f"Известных персонажей: {len(known_speakers)}: {', '.join(sorted(known_speakers))}\n")
+    print(f"Known characters: {len(known_speakers)}: {', '.join(sorted(known_speakers))}\n")
 
     chapters = (
         [data["chapters"][chapter_idx]] if chapter_idx is not None
@@ -222,7 +205,7 @@ def run(
 
     print(f"Книга:  {data['title']}")
     print(f"Глав:   {len(data['chapters'])}")
-    print(f"Режим:  {'PREVIEW (не сохраняем)' if preview else 'WRITE'}\n")
+    print(f"Режим:  {'PREVIEW (not saved)' if preview else 'WRITE'}\n")
 
     data = process_book(data, chapter_idx, preview)
 
@@ -231,21 +214,21 @@ def run(
         with open(tmp, "w", encoding="utf-8") as f:
             f.write(json.dumps(data, ensure_ascii=True, indent=2))
         import os; os.replace(tmp, output_path)
-        print(f"\nСохранено: {output_path}")
+        print(f"\nSaved: {output_path}")
     else:
-        print("\nPreview завершён. Запусти без --preview чтобы сохранить.")
+        print("\nPreview is ready.")
 
 
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("book",      help="Имя книги, например: alice")
+    parser.add_argument("book",      help="Name of the book")
     parser.add_argument("--input",   default="parsed_final.json")
     parser.add_argument("--output",  default="parsed_fixed.json")
     parser.add_argument("--chapter", type=int, default=None)
     parser.add_argument("--preview", action="store_true",
-                        help="Показать что будет разбито без сохранения")
+                        help="Show splits without saving changes")
     args = parser.parse_args()
 
     run(args.book, args.input, args.output, args.chapter, args.preview)

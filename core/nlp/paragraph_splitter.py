@@ -60,7 +60,6 @@ def resolve_speaker(
             return char_names[char_id]
         return phrase
 
-    # Не местоимение — просто чистим
     return _clean_speaker(phrase)
 
 
@@ -96,7 +95,7 @@ def split_paragraph_by_quotes(
             local_start    = byte_start - para_char_start
             local_end      = byte_end   - para_char_start
             mention_phrase = str(q["mention_phrase"])
-            # Разрешаем местоимение → имя
+
             speaker = resolve_speaker(mention_phrase, char_id, char_names)
             relevant_quotes.append((local_start, local_end, speaker))
 
@@ -162,9 +161,7 @@ def split_chapter_paragraphs(
     tokens_df: pd.DataFrame,
     char_names: Dict[int, str],
 ) -> List[Paragraph]:
-    """
-    Разбивает все параграфы главы.
-    """
+
     offsets = []
     pos = 0
     texts = [p.text for p in paragraphs]
