@@ -63,6 +63,24 @@ def load_voice_map(book: str, engine: str) -> dict:
     return {"NARRATOR": default_voice(engine)}
 
 
+def build_alias_map(book: str, voice_map: dict) -> dict[str, str]:
+    """Build {alias -> voice_id} from characters.json aliases."""
+    chars_path = STORAGE_DIR / book / "characters.json"
+    if not chars_path.exists():
+        return {}
+    characters = load_json(chars_path)
+    alias_map: dict[str, str] = {}
+    for char in characters:
+        name     = char["name"]
+        voice_id = voice_map.get(name)
+        if not voice_id:
+            continue
+        for alias in char.get("aliases", []):
+            if alias not in voice_map:
+                alias_map[alias] = voice_id
+    return alias_map
+
+
 def save_voice_map(vm: dict, book: str, engine: str) -> None:
     path = voice_map_path(book, engine)
     with open(path, "w", encoding="utf-8") as f:
@@ -118,9 +136,14 @@ def assign_voices_interactively(
 
 
 
-def get_voice(speaker: str | None, voice_map: dict, narrator_voice: str) -> str:
-    if speaker and speaker.strip() in voice_map:
-        return voice_map[speaker.strip()]
+def get_voice(speaker: str | None, voice_map: dict, alias_map: dict, narrator_voice: str) -> str:
+    if not speaker:
+        return voice_map.get("NARRATOR", narrator_voice)
+    s = speaker.strip()
+    if s in voice_map:
+        return voice_map[s]
+    if s in alias_map:
+        return alias_map[s]
     return voice_map.get("NARRATOR", narrator_voice)
 
 
@@ -138,6 +161,7 @@ def synthesize_chapter(
     gt_path = book_dir / "ground_truth_fixed.json"
     src_path = gt_path if gt_path.exists() else book_dir / "parsed_final.json"
     data = load_json(src_path)
+    alias_map = build_alias_map(book, voice_map)
 
     chapters = data["chapters"]
     if chapter_idx >= len(chapters):
@@ -163,7 +187,7 @@ def synthesize_chapter(
             continue
 
         speaker = para.get("speaker_ground_truth") or para.get("speaker")
-        voice_id = get_voice(speaker, voice_map, narrator_voice) if use_voice_map else narrator_voice
+        voice_id = get_voice(speaker, voice_map, alias_map, narrator_voice) if use_voice_map else narrator_voice
         out_file = output_dir / f"{i:04d}.mp3"
         para_type = para.get("type", "narration")
 
@@ -188,7 +212,6 @@ def synthesize_chapter(
         print("No audio segments were generated.")
         return None
 
-    # Pause durations depending on paragraph type transitions
     PAUSE = {
         ("narration",  "narration"):  200,
         ("narration",  "dialogue"):   400,

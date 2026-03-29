@@ -39,31 +39,27 @@ def download_voices(book: str) -> None:
     resp.raise_for_status()
     all_voices = {v["voice_id"]: v for v in resp.json()["voices"]}
 
-    seen_ids: set[str] = set()
-
-    for character, voice_id in voice_map.items():
-        if voice_id in seen_ids:
-            print(f"  {character:<20} skipped (same voice as previous)")
-            continue
-        seen_ids.add(voice_id)
-
-        out_path = VOICES_DIR / f"{character.lower().replace(' ', '_')}.mp3"
+    # Download one MP3 per unique voice_id (named by voice_id)
+    id_to_file: dict[str, Path] = {}
+    for voice_id in set(voice_map.values()):
+        out_path = VOICES_DIR / f"{voice_id}.mp3"
+        id_to_file[voice_id] = out_path
 
         if out_path.exists() and out_path.stat().st_size > 0:
-            print(f"  {character:<20} already exists: {out_path.name}")
+            print(f"  {voice_id[:30]:<30} already exists")
             continue
 
         voice_meta = all_voices.get(voice_id)
         if not voice_meta:
-            print(f"  {character:<20} voice_id {voice_id} not found in your ElevenLabs account")
+            print(f"  {voice_id[:30]:<30} not found in ElevenLabs account")
             continue
 
         preview_url = voice_meta.get("preview_url")
         if not preview_url:
-            print(f"  {character:<20} no preview_url available")
+            print(f"  {voice_id[:30]:<30} no preview_url")
             continue
 
-        print(f"  {character:<20} downloading {voice_meta['name']} ...", end=" ", flush=True)
+        print(f"  {voice_meta['name']:<30} downloading ...", end=" ", flush=True)
         audio = requests.get(preview_url)
         audio.raise_for_status()
         out_path.write_bytes(audio.content)
@@ -72,13 +68,13 @@ def download_voices(book: str) -> None:
     print(f"\nDone. Files in {VOICES_DIR}:")
     for f in sorted(VOICES_DIR.iterdir()):
         size_kb = f.stat().st_size // 1024
-        print(f"  {f.name:<35} {size_kb} KB")
+        print(f"  {f.name:<45} {size_kb} KB")
 
-    # Build voice_map_xtts.json
+    # Build voice_map_xtts.json — all characters, including duplicates
     xtts_map = {}
     for character, voice_id in voice_map.items():
-        mp3 = VOICES_DIR / f"{character.lower().replace(' ', '_')}.mp3"
-        if mp3.exists():
+        mp3 = id_to_file.get(voice_id)
+        if mp3 and mp3.exists():
             xtts_map[character] = str(mp3)
 
     xtts_map_path = Path(f"storage/uploads/{book}/voice_map_xtts.json")

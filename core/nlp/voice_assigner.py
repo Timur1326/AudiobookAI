@@ -144,7 +144,9 @@ def run(
     print(f"Narrator:   {narrator_voice['name']} ({narrator_voice['id']})")
     print("Asking LLM to assign voices for characters...\n")
 
-    voice_map = call_llm(client, characters, voices)
+    # Exclude narrator voice so LLM can't assign it to any character
+    character_voices = [v for v in voices if v["id"] != narrator_voice["id"]]
+    voice_map = call_llm(client, characters, character_voices)
     voice_map["NARRATOR"] = narrator_voice["id"]
 
     id_to_name = {v["id"]: v["name"] for v in voices}
