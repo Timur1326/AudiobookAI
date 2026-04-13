@@ -13,6 +13,7 @@ Usage:
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 import anthropic
@@ -82,12 +83,22 @@ def build_prompt(data: dict) -> str:
 def call_llm(client: anthropic.Anthropic, data: dict) -> list[dict]:
     prompt = build_prompt(data)
 
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=4096,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": prompt}],
-    )
+    for attempt in range(5):
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except anthropic.OverloadedError:
+            wait = 15 * (2 ** attempt)
+            print(f"API overloaded, retrying in {wait}s (attempt {attempt + 1}/5)...")
+            time.sleep(wait)
+    else:
+        raise RuntimeError("API overloaded after 5 retries")
+
     raw = response.content[0].text
 
     match = re.search(r"\[.*\]", raw, re.DOTALL)
@@ -144,6 +155,109 @@ def run(
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(characters, f, ensure_ascii=False, indent=2)
     print(f"\nSaved: {output_path}")
+
+
+def build_prompt_from_db(book_id: int, db) -> str:
+    """Build LLM prompt using dialogue paragraphs from DB."""
+    from backend.models import Paragraph as DBParagraph, Chapter as DBChapter, Book as DBBook
+
+    db_book = db.query(DBBook).filter(DBBook.id == book_id).first()
+    title  = db_book.title  if db_book else "Unknown"
+    author = db_book.author if db_book else "Unknown"
+
+    rows = (db.query(DBParagraph)
+              .join(DBChapter)
+              .filter(DBChapter.book_id == book_id,
+                      DBParagraph.type == "dialogue",
+                      DBParagraph.speaker.isnot(None))
+              .all())
+
+    samples: dict[str, list[str]] = {}
+    for p in rows:
+        if p.speaker not in samples:
+            samples[p.speaker] = []
+        if len(samples[p.speaker]) < 3:
+            samples[p.speaker].append(p.text[:120])
+
+    lines = [f"Book: {title} by {author}\n", "Speaking characters with sample dialogue:\n"]
+    for speaker, quotes in sorted(samples.items()):
+        lines.append(f"{speaker}:")
+        for q in quotes:
+            lines.append(f'  "{q}"')
+
+    return "\n".join(lines)
+
+
+def run_on_db(book_id: int, db) -> None:
+    """
+    Extract characters from DB paragraphs and save directly to DB.
+    Creates Character + CharacterAlias records.
+    """
+    from backend.models import Character as DBCharacter, CharacterAlias
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY not set in .env")
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    # Build prompt from DB data
+    prompt = build_prompt_from_db(book_id, db)
+
+    print(f"Extracting characters via LLM...")
+    # Reuse call_llm by passing a fake data dict structure
+    # Actually call the API directly since we already have the prompt
+    for attempt in range(5):
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=4096,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            break
+        except anthropic.OverloadedError:
+            wait = 15 * (2 ** attempt)
+            print(f"API overloaded, retrying in {wait}s...")
+            time.sleep(wait)
+    else:
+        raise RuntimeError("API overloaded after 5 retries")
+
+    raw = response.content[0].text
+    match = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not match:
+        raise ValueError(f"No JSON array in response:\n{raw}")
+    characters = json.loads(match.group())
+
+    print(f"Found {len(characters)} characters")
+
+    # Clear existing characters for this book
+    db.query(DBCharacter).filter(DBCharacter.book_id == book_id).delete()
+    db.flush()
+
+    for c in characters:
+        name = c.get("name", "").strip()
+        if not name:
+            continue
+
+        db_char = DBCharacter(
+            book_id=book_id,
+            name=name,
+            gender=c.get("gender"),
+            age=c.get("age"),
+            personality=c.get("personality"),
+            accent=c.get("accent"),
+            voice_desc=c.get("voice_description"),
+        )
+        db.add(db_char)
+        db.flush()
+
+        for alias in c.get("aliases", []):
+            if alias and alias.strip():
+                db.add(CharacterAlias(character_id=db_char.id, alias=alias.strip()))
+
+    db.commit()
+    print(f"Saved {len(characters)} characters to DB.")
 
 
 if __name__ == "__main__":

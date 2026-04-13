@@ -1,0 +1,465 @@
+import json
+import shutil
+from datetime import datetime
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from sqlalchemy.orm import Session
+
+from backend.auth import get_current_user, get_current_user_optional
+from backend.database import get_db
+from backend.models import Book, Chapter, Paragraph, ParagraphTimestamp, PipelineStep, StepStatus, User
+
+router = APIRouter()
+
+STORAGE_DIR = Path("storage/uploads")
+TOTAL_STEPS = 7
+
+
+def load_json(path: Path) -> dict:
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def book_data(book_slug: str) -> dict:
+    """Load best available parsed JSON for a book."""
+    base = STORAGE_DIR / book_slug
+    for name in ("ground_truth_fixed.json", "parsed_with_scenes.json", "parsed_final.json", "parsed.json"):
+        p = base / name
+        if p.exists():
+            return load_json(p)
+    raise HTTPException(status_code=404, detail=f"No parsed data for book '{book_slug}'")
+
+
+def _detect_step_statuses(slug: str, db: Session) -> None:
+    """Infer step statuses from existing files (for books uploaded before DB)."""
+    base = STORAGE_DIR / slug
+    book = db.query(Book).filter(Book.slug == slug).first()
+    if not book:
+        return
+
+    file_checks = {
+        1: base / "parsed.json",
+        2: base / "parsed_final.json",
+        3: base / "parsed_final.json",
+        4: base / "parsed_with_scenes.json",
+        5: base / "characters.json",
+        6: base / "voice_map_elevenlabs.json",
+    }
+
+    for step_num in range(1, TOTAL_STEPS + 1):
+        step = db.query(PipelineStep).filter(
+            PipelineStep.book_id == book.id,
+            PipelineStep.step == step_num
+        ).first()
+        if not step:
+            continue
+        if step.status == StepStatus.pending and step_num in file_checks:
+            if file_checks[step_num].exists():
+                step.status = StepStatus.done
+                step.updated_at = datetime.utcnow()
+
+    db.commit()
+
+
+# ── GET /books ────────────────────────────────────────────────────────────────
+
+@router.get("/")
+def list_books(db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
+    """List books for the current user (or all books if not authenticated)."""
+    q = db.query(Book).order_by(Book.created_at.desc())
+    if current_user:
+        q = q.filter(Book.user_id == current_user.id)
+    books = q.all()
+
+    result = []
+    for book in books:
+        steps = {s.step: s.status for s in book.steps}
+        done_count = sum(1 for s in steps.values() if s == StepStatus.done)
+        result.append({
+            "slug":       book.slug,
+            "title":      book.title,
+            "author":     book.author,
+            "created_at": book.created_at.isoformat(),
+            "progress":   {"done": done_count, "total": TOTAL_STEPS},
+            "steps":      {str(k): v for k, v in steps.items()},
+        })
+
+    return {"books": result}
+
+
+# ── POST /books/upload ────────────────────────────────────────────────────────
+
+@router.post("/upload")
+async def upload_book(file: UploadFile = File(...), db: Session = Depends(get_db),
+                      current_user: User | None = Depends(get_current_user_optional)):
+    """Upload an EPUB file, parse it, and register in DB."""
+    if not file.filename.endswith(".epub"):
+        raise HTTPException(status_code=400, detail="Only EPUB files are supported")
+
+    slug = Path(file.filename).stem.lower().replace(" ", "_")
+
+    # Check for duplicate
+    existing = db.query(Book).filter(Book.slug == slug).first()
+    if existing:
+        raise HTTPException(status_code=409, detail=f"Book '{slug}' already exists")
+
+    book_dir = STORAGE_DIR / slug
+    book_dir.mkdir(parents=True, exist_ok=True)
+
+    epub_path = book_dir / file.filename
+    with open(epub_path, "wb") as f:
+        shutil.copyfileobj(file.file, f)
+
+    # Parse EPUB metadata first (lightweight — no paragraph extraction yet)
+    from core.parser.epub_parser import parse_epub, parse_epub_to_db
+    b = parse_epub(str(epub_path))
+
+    # Save Book to DB
+    book = Book(
+        slug=slug,
+        title=b.title,
+        author=getattr(b, "author", ""),
+        epub_path=str(epub_path),
+        user_id=current_user.id if current_user else None,
+    )
+    db.add(book)
+    db.flush()  # get book.id
+
+    # Create pipeline steps
+    for step_num in range(1, TOTAL_STEPS + 1):
+        db.add(PipelineStep(book_id=book.id, step=step_num, status=StepStatus.pending))
+    db.flush()
+
+    # Parse EPUB and write chapters + paragraphs directly to DB
+    total_paragraphs = parse_epub_to_db(str(epub_path), book.id, db)
+
+    # Mark step 1 as done
+    step1 = db.query(PipelineStep).filter(
+        PipelineStep.book_id == book.id, PipelineStep.step == 1
+    ).first()
+    if step1:
+        step1.status = StepStatus.done
+        step1.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(book)
+
+    chapter_count = db.query(Chapter).filter(Chapter.book_id == book.id).count()
+
+    return {
+        "slug":       slug,
+        "title":      book.title,
+        "chapters":   chapter_count,
+        "paragraphs": total_paragraphs,
+    }
+
+
+# ── GET /books/{book} ─────────────────────────────────────────────────────────
+
+@router.get("/{book}")
+def get_book(book: str, db: Session = Depends(get_db)):
+    """Get book metadata, chapter list, and pipeline status."""
+    db_book = db.query(Book).filter(Book.slug == book).first()
+    if not db_book:
+        raise HTTPException(status_code=404, detail=f"Book '{book}' not found")
+
+    # Auto-detect statuses from files (for existing books)
+    _detect_step_statuses(book, db)
+    db.refresh(db_book)
+
+    steps = [
+        {
+            "step":       s.step,
+            "name":       s.name,
+            "status":     s.status,
+            "updated_at": s.updated_at.isoformat(),
+            "error_msg":  s.error_msg,
+        }
+        for s in sorted(db_book.steps, key=lambda x: x.step)
+    ]
+
+    chapters = [
+        {
+            "id":           ch.chapter_id,
+            "index":        ch.chapter_index,
+            "title":        ch.title,
+            "synth_status": ch.synth_status,
+            "audio_path":   ch.audio_path,
+        }
+        for ch in db_book.chapters
+    ]
+
+    return {
+        "slug":       db_book.slug,
+        "title":      db_book.title,
+        "author":     db_book.author,
+        "created_at": db_book.created_at.isoformat(),
+        "steps":      steps,
+        "chapters":   chapters,
+    }
+
+
+# ── DELETE /books/{book} ──────────────────────────────────────────────────────
+
+@router.delete("/{book}")
+def delete_book(book: str, db: Session = Depends(get_db)):
+    """Delete a book and all its files."""
+    db_book = db.query(Book).filter(Book.slug == book).first()
+    if not db_book:
+        raise HTTPException(status_code=404, detail=f"Book '{book}' not found")
+
+    book_dir = STORAGE_DIR / book
+    if book_dir.exists():
+        shutil.rmtree(book_dir)
+
+    db.delete(db_book)
+    db.commit()
+
+    return {"ok": True, "deleted": book}
+
+
+# ── GET /books/{book}/chapters/{chapter_id} ───────────────────────────────────
+
+@router.get("/{book}/chapters/{chapter_id}")
+def get_chapter(book: str, chapter_id: int):
+    """Get paragraphs of a chapter with attribution."""
+    data = book_data(book)
+
+    chapter = next((ch for ch in data["chapters"] if ch["id"] == chapter_id), None)
+    if chapter is None:
+        raise HTTPException(status_code=404, detail=f"Chapter {chapter_id} not found")
+
+    if "paragraphs" in chapter:
+        paragraphs = chapter["paragraphs"]
+    else:
+        paragraphs = [
+            p
+            for scene in chapter.get("scenes", [])
+            for p in scene["paragraphs"]
+        ]
+
+    return {
+        "id":         chapter["id"],
+        "title":      chapter["title"],
+        "paragraphs": [
+            {
+                "index":               i,
+                "text":                p["text"],
+                "type":                p["type"],
+                "speaker":             p.get("speaker_ground_truth") or p.get("speaker_llm_context") or p.get("speaker"),
+                "speaker_llm_context": p.get("speaker_llm_context"),
+                "speaker_llm_zeroshot": p.get("speaker_llm_zeroshot"),
+            }
+            for i, p in enumerate(paragraphs)
+        ],
+    }
+
+
+# ── GET /books/{book}/chapters/{chapter_id}/reader ────────────────────────────
+
+import re as _re
+_WORD_RE = _re.compile(r"[a-zA-Z0-9']+")
+
+
+def _words(text: str) -> list[str]:
+    return [w.lower() for w in _WORD_RE.findall(text)]
+
+
+def _map_raw_to_timestamps(raw_paras, split_paras, ts_list):
+    """
+    Match raw paragraphs to time ranges and extract speaker/type from split paras.
+    Goes through split paragraphs in order; for each raw paragraph greedily
+    consumes split paragraphs whose words are largely contained in the raw text.
+    """
+    ts_by_idx = {t["index"]: t for t in ts_list}
+    results   = []
+    sp_cursor = 0
+    n_split   = len(split_paras)
+
+    for raw_idx, raw_para in enumerate(raw_paras):
+        raw_words    = set(_words(raw_para["text"]))
+        matched      = []
+        matched_sps  = []
+
+        temp = sp_cursor
+        while temp < n_split:
+            sp_words = _words(split_paras[temp]["text"])
+            if not sp_words:
+                temp += 1
+                continue
+            overlap = sum(1 for w in sp_words if w in raw_words)
+            if overlap / len(sp_words) >= 0.5:
+                t = ts_by_idx.get(temp)
+                if t:
+                    matched.append(t)
+                matched_sps.append(split_paras[temp])
+                temp += 1
+            else:
+                break
+
+        if matched:
+            sp_cursor = temp
+
+        # Determine speaker and type from matched split paragraphs
+        # Prefer dialogue speaker if any matched split para is dialogue
+        speaker = None
+        para_type = "narration"
+        for sp in matched_sps:
+            sp_type = sp.get("type", "narration")
+            if sp_type == "dialogue":
+                para_type = "dialogue"
+                sp_speaker = (sp.get("speaker_ground_truth")
+                              or sp.get("speaker_llm_context")
+                              or sp.get("speaker"))
+                if sp_speaker:
+                    speaker = sp_speaker
+                    break
+
+        results.append({
+            "index":   raw_idx,
+            "text":    raw_para["text"],
+            "start":   matched[0]["start"]  if matched else None,
+            "end":     matched[-1]["end"]   if matched else None,
+            "speaker": speaker,
+            "type":    para_type,
+        })
+
+    return results
+
+
+def _map_raw_no_timestamps(raw_paras, split_paras):
+    """Map raw paragraphs to speaker/type without timestamps."""
+    n_split   = len(split_paras)
+    results   = []
+    sp_cursor = 0
+
+    for raw_idx, raw_para in enumerate(raw_paras):
+        raw_words   = set(_words(raw_para["text"]))
+        matched_sps = []
+
+        temp = sp_cursor
+        while temp < n_split:
+            sp_words = _words(split_paras[temp]["text"])
+            if not sp_words:
+                temp += 1
+                continue
+            overlap = sum(1 for w in sp_words if w in raw_words)
+            if overlap / len(sp_words) >= 0.5:
+                matched_sps.append(split_paras[temp])
+                temp += 1
+            else:
+                break
+
+        if matched_sps:
+            sp_cursor = temp
+
+        speaker   = None
+        para_type = "narration"
+        for sp in matched_sps:
+            if sp.get("type") == "dialogue":
+                para_type = "dialogue"
+                sp_speaker = (sp.get("speaker_ground_truth")
+                              or sp.get("speaker_llm_context")
+                              or sp.get("speaker"))
+                if sp_speaker:
+                    speaker = sp_speaker
+                    break
+
+        results.append({
+            "index":   raw_idx,
+            "text":    raw_para["text"],
+            "start":   None,
+            "end":     None,
+            "speaker": speaker,
+            "type":    para_type,
+        })
+
+    return results
+
+
+@router.get("/{book}/chapters/{chapter_id}/reader")
+def get_chapter_reader(book: str, chapter_id: int, engine: str = "elevenlabs",
+                       db: Session = Depends(get_db)):
+    """
+    Return paragraphs with timestamps from the database.
+    Falls back to JSON files if paragraphs are not yet migrated.
+    """
+    db_book = db.query(Book).filter(Book.slug == book).first()
+    if not db_book:
+        raise HTTPException(404, f"Book '{book}' not found")
+
+    db_chapter = db.query(Chapter).filter(
+        Chapter.book_id == db_book.id,
+        Chapter.chapter_id == chapter_id,
+    ).first()
+    if not db_chapter:
+        raise HTTPException(404, f"Chapter {chapter_id} not found")
+
+    # Check if paragraphs are in DB
+    db_paras = (db.query(Paragraph)
+                  .filter(Paragraph.chapter_id == db_chapter.id)
+                  .order_by(Paragraph.index)
+                  .all())
+
+    if db_paras:
+        # Load timestamps from DB
+        para_ids = [p.id for p in db_paras]
+        ts_rows = (db.query(ParagraphTimestamp)
+                     .filter(ParagraphTimestamp.paragraph_id.in_(para_ids),
+                             ParagraphTimestamp.engine == engine)
+                     .all())
+        ts_by_para_id = {t.paragraph_id: t for t in ts_rows}
+
+        paras = []
+        for p in db_paras:
+            ts = ts_by_para_id.get(p.id)
+            paras.append({
+                "index":   p.index,
+                "text":    p.text,
+                "type":    p.type,
+                "speaker": p.speaker,
+                "start":   ts.start if ts else None,
+                "end":     ts.end   if ts else None,
+            })
+
+        return {"id": chapter_id, "title": db_chapter.title, "paragraphs": paras}
+
+    # Fallback: read from JSON files (not yet migrated)
+    base = STORAGE_DIR / book
+    split_data = book_data(book)
+    split_ch   = next((c for c in split_data["chapters"] if c["id"] == chapter_id), None)
+    if not split_ch:
+        raise HTTPException(404, f"Chapter {chapter_id} not found in JSON")
+
+    split_paras = (
+        split_ch["paragraphs"] if "paragraphs" in split_ch
+        else [p for s in split_ch.get("scenes", []) for p in s["paragraphs"]]
+    )
+    split_paras = [p for p in split_paras if p.get("text", "").strip()]
+
+    ts_path = base / "audio" / engine / f"chapter_{chapter_id:02d}_timestamps.json"
+    if not ts_path.exists():
+        import synthesize_chapter as sc
+        sc.build_timestamps_from_segments(book, chapter_id, engine)
+
+    ts_by_idx = {}
+    if ts_path.exists():
+        ts_by_idx = {t["index"]: t for t in load_json(ts_path)}
+
+    paras = []
+    for i, p in enumerate(split_paras):
+        ts      = ts_by_idx.get(i, {})
+        speaker = (p.get("speaker_ground_truth")
+                   or p.get("speaker_llm_context")
+                   or p.get("speaker"))
+        paras.append({
+            "index":   i,
+            "text":    p["text"],
+            "type":    p.get("type", "narration"),
+            "speaker": speaker,
+            "start":   ts.get("start"),
+            "end":     ts.get("end"),
+        })
+
+    return {"id": chapter_id, "title": split_ch["title"], "paragraphs": paras}

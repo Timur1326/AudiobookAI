@@ -12,6 +12,7 @@ Usage:
 import json
 import os
 import re
+import time
 from pathlib import Path
 
 import anthropic
@@ -90,12 +91,22 @@ def build_prompt(characters: list[dict], voices: list[dict]) -> str:
 
 
 def call_llm(client: anthropic.Anthropic, characters: list[dict], voices: list[dict]) -> dict:
-    response = client.messages.create(
-        model=MODEL,
-        max_tokens=1024,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": build_prompt(characters, voices)}],
-    )
+    for attempt in range(5):
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=1024,
+                system=SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": build_prompt(characters, voices)}],
+            )
+            break
+        except (anthropic.RateLimitError, anthropic.OverloadedError) as e:
+            wait = 15 * (2 ** attempt)
+            print(f"{type(e).__name__}, retrying in {wait}s (attempt {attempt + 1}/5)...")
+            time.sleep(wait)
+    else:
+        raise RuntimeError("API overloaded after 5 retries")
+
     raw = response.content[0].text
 
     match = re.search(r"\{.*\}", raw, re.DOTALL)
@@ -166,6 +177,70 @@ def run(
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(voice_map, f, ensure_ascii=False, indent=2)
     print(f"\nSaved: {out_path}")
+
+
+def run_on_db(book_id: int, db, engine: str = "elevenlabs") -> None:
+    """
+    Assign TTS voices to characters reading from DB and writing back to DB.
+    Updates Character.voice_id and Character.engine fields.
+    """
+    from backend.models import Character as DBCharacter
+
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+    db_chars = db.query(DBCharacter).filter(DBCharacter.book_id == book_id).all()
+    if not db_chars:
+        raise ValueError("No characters in DB — run character extraction first (step 4)")
+
+    # Convert DB characters to dicts for existing LLM logic
+    characters = [
+        {
+            "name":              c.name,
+            "gender":            c.gender or "unknown",
+            "age":               c.age or "unknown",
+            "personality":       c.personality or "",
+            "accent":            c.accent or "unknown",
+            "voice_description": c.voice_desc or "",
+        }
+        for c in db_chars
+    ]
+
+    print(f"Characters: {len(characters)}")
+    print("Fetching voices from ElevenLabs...", end=" ", flush=True)
+
+    voices = get_elevenlabs_voices()
+    print(f"{len(voices)} voices found")
+
+    narrator_voice = next(
+        (v for v in voices if v.get("use_case") == "narrative_story"), None
+    ) or next(
+        (v for v in voices if "narrat" in v["name"].lower()), voices[0]
+    )
+    print(f"Narrator: {narrator_voice['name']} ({narrator_voice['id']})")
+
+    character_voices = [v for v in voices if v["id"] != narrator_voice["id"]]
+    voice_map = call_llm(client, characters, character_voices)
+    voice_map["NARRATOR"] = narrator_voice["id"]
+
+    # Save voice assignments to DB
+    name_to_char = {c.name: c for c in db_chars}
+    # Also index by aliases
+    for c in db_chars:
+        for alias in c.aliases:
+            name_to_char[alias.alias] = c
+
+    assigned = 0
+    for char_name, voice_id in voice_map.items():
+        if char_name == "NARRATOR":
+            continue
+        db_char = name_to_char.get(char_name)
+        if db_char:
+            db_char.voice_id = voice_id
+            db_char.engine   = engine
+            assigned += 1
+
+    db.commit()
+    print(f"Assigned voices to {assigned}/{len(db_chars)} characters in DB.")
 
 
 if __name__ == "__main__":

@@ -179,6 +179,87 @@ def run(
     print(f"Saved: {output_path}")
 
 
+def run_on_db(book_id: int, db, chapter_id: int | None = None) -> None:
+    """
+    Run scene detection directly on DB paragraphs.
+    Creates Scene records and assigns Paragraph.scene_id.
+    """
+    from backend.models import (
+        Chapter as DBChapter,
+        Paragraph as DBParagraph,
+        Scene as DBScene,
+    )
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY not set in .env")
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    chapters_q = db.query(DBChapter).filter(DBChapter.book_id == book_id)
+    if chapter_id is not None:
+        chapters_q = chapters_q.filter(DBChapter.chapter_id == chapter_id)
+    chapters = chapters_q.order_by(DBChapter.chapter_index).all()
+
+    for ch in chapters:
+        db_paras = (db.query(DBParagraph)
+                      .filter(DBParagraph.chapter_id == ch.id)
+                      .order_by(DBParagraph.index)
+                      .all())
+
+        if not db_paras:
+            print(f"  [{ch.chapter_id}] {ch.title[:50]} — no paragraphs, skipping")
+            continue
+
+        # Build paragraph dicts for LLM
+        para_dicts = [{"text": p.text, "type": p.type} for p in db_paras]
+
+        print(f"  [{ch.chapter_id}] {ch.title[:50]}  ({len(db_paras)} paragraphs)")
+
+        scenes = call_llm(client, para_dicts)
+        print(f"    Scenes: {len(scenes)}")
+
+        # Remove old scenes for this chapter
+        db.query(DBScene).filter(DBScene.chapter_id == ch.id).delete()
+        db.flush()
+
+        for scene in scenes:
+            start = scene["start_paragraph"]
+            end   = min(scene["end_paragraph"], len(db_paras) - 1)
+            paras_in_scene = db_paras[start:end + 1]
+
+            preview = " ".join(p.text for p in paras_in_scene[:3])[:300]
+
+            db_scene = DBScene(
+                chapter_id=ch.id,
+                scene_index=scene["scene_id"],
+                preview=preview,
+            )
+            db.add(db_scene)
+            db.flush()
+
+            for p in paras_in_scene:
+                p.scene_id = db_scene.id
+
+        # Any leftover paragraphs → last scene
+        if scenes:
+            last_end = scenes[-1]["end_paragraph"]
+            if last_end < len(db_paras) - 1:
+                last_scene = (db.query(DBScene)
+                                .filter(DBScene.chapter_id == ch.id)
+                                .order_by(DBScene.scene_index.desc())
+                                .first())
+                if last_scene:
+                    for p in db_paras[last_end + 1:]:
+                        p.scene_id = last_scene.id
+
+        db.flush()
+        print(f"    Done.")
+
+    db.commit()
+    print("Scene detection done.")
+
+
 if __name__ == "__main__":
     import argparse
 

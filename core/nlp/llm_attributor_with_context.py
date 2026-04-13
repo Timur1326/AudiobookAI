@@ -45,11 +45,25 @@ Output format:
 def extract_characters(data: dict) -> list[str]:
     seen: set[str] = set()
     for chapter in data["chapters"]:
-        for para in chapter["paragraphs"]:
+        # Support both flat paragraphs and nested scenes
+        if "paragraphs" in chapter:
+            paragraphs = chapter["paragraphs"]
+        else:
+            paragraphs = [p for s in chapter.get("scenes", []) for p in s["paragraphs"]]
+        for para in paragraphs:
             speaker = para.get("speaker")
             if speaker and speaker.strip():
                 seen.add(speaker.strip())
     return sorted(seen)
+
+
+def _iter_scenes(chapter: dict):
+    """Yield (scene_label, paragraphs_list) for each scene or the whole chapter."""
+    if "scenes" in chapter:
+        for scene in chapter["scenes"]:
+            yield scene.get("name", "scene"), scene["paragraphs"]
+    else:
+        yield chapter["title"], chapter["paragraphs"]
 
 
 def _build_system_prompt(characters: list[str]) -> str:
@@ -102,9 +116,9 @@ def attribute_chunk(
                 }
             time.sleep(1)
 
-        except anthropic.RateLimitError:
-            wait = 5 * attempt
-            print(f"    Rate limit — ждём {wait}s...")
+        except (anthropic.RateLimitError, anthropic.OverloadedError) as e:
+            wait = 15 * attempt
+            print(f"    {type(e).__name__} — waiting {wait}s...")
             time.sleep(wait)
 
     return {}
@@ -244,6 +258,189 @@ def run_with_context(
     os.replace(tmp, output_path)
 
     print(f"\nSaved: {output_path}")
+
+
+def _load_characters_from_file(characters_path: str) -> list[str]:
+    """Load character names (+ aliases) from characters.json produced by character_extractor."""
+    if not os.path.exists(characters_path):
+        return []
+    with open(characters_path, encoding="utf-8") as f:
+        raw = json.load(f)
+    chars_data = raw if isinstance(raw, list) else raw.get("characters", [])
+    names: list[str] = []
+    for c in chars_data:
+        name = c.get("name") or c.get("character")
+        if name:
+            names.append(name)
+        for alias in c.get("aliases", []):
+            if alias and alias not in names:
+                names.append(alias)
+    return names
+
+
+def run_by_scenes(
+    input_path: str,
+    output_path: str,
+    max_scene_size: int = 20,
+    characters_path: str | None = None,
+) -> None:
+    """
+    Attribute dialogue chapter by chapter, scene by scene.
+    Processes parsed_with_scenes.json — each scene is one LLM call.
+    If a scene exceeds max_scene_size paragraphs it is split into chunks.
+    If characters_path is given, loads character list from characters.json
+    (run character_extractor before this step for best results).
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY not set in .env")
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    with open(input_path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Prefer explicit characters.json; fall back to names found in speaker fields
+    if characters_path:
+        characters = _load_characters_from_file(characters_path)
+    else:
+        characters = extract_characters(data)
+    print(f"Known characters: {len(characters)}  —  {', '.join(characters) or 'none yet'}")
+    system_prompt = _build_system_prompt(characters)
+
+    total_attributed = 0
+
+    for chapter in data["chapters"]:
+        print(f"\n[{chapter['id']}] {chapter['title']}")
+
+        for scene_label, paragraphs in _iter_scenes(chapter):
+            if not paragraphs:
+                continue
+
+            dialogue_count = sum(1 for p in paragraphs if p.get("type") == "dialogue")
+            if dialogue_count == 0:
+                continue
+
+            print(f"  Scene '{scene_label}'  ({len(paragraphs)} paragraphs, {dialogue_count} dialogues)")
+
+            # Split large scenes into chunks to stay within token limits
+            chunk_size = max_scene_size
+            for chunk_start in range(0, len(paragraphs), chunk_size):
+                chunk = paragraphs[chunk_start: chunk_start + chunk_size]
+                attributions = attribute_chunk(client, chunk, offset=chunk_start, system_prompt=system_prompt)
+
+                for idx, speaker in attributions.items():
+                    if idx < len(paragraphs):
+                        paragraphs[idx]["speaker_llm_context"] = speaker
+                        if speaker:
+                            total_attributed += 1
+
+            time.sleep(0.3)
+
+    # Save
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    tmp = output_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        f.write(json.dumps(data, ensure_ascii=False, indent=2))
+    os.replace(tmp, output_path)
+    print(f"\nSaved: {output_path}  (total attributed: {total_attributed})")
+
+
+def run_on_db(book_id: int, db, chapter_id: int | None = None,
+              max_scene_size: int = CHUNK_SIZE) -> None:
+    """
+    Run dialogue attribution directly on DB paragraphs.
+    Reads Scene → Paragraph from DB, updates Paragraph.speaker.
+    """
+    from backend.models import (
+        Chapter as DBChapter,
+        Paragraph as DBParagraph,
+        Scene as DBScene,
+        Character as DBCharacter,
+        CharacterAlias,
+    )
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY not set in .env")
+
+    client = anthropic.Anthropic(api_key=api_key)
+
+    # Load known characters from DB
+    chars = db.query(DBCharacter).filter(DBCharacter.book_id == book_id).all()
+    characters = []
+    for c in chars:
+        characters.append(c.name)
+        for alias in c.aliases:
+            if alias.alias not in characters:
+                characters.append(alias.alias)
+
+    print(f"Known characters: {len(characters)}  —  {', '.join(characters) or 'none yet'}")
+    system_prompt = _build_system_prompt(characters)
+
+    chapters_q = db.query(DBChapter).filter(DBChapter.book_id == book_id)
+    if chapter_id is not None:
+        chapters_q = chapters_q.filter(DBChapter.chapter_id == chapter_id)
+    chapters = chapters_q.order_by(DBChapter.chapter_index).all()
+
+    total_attributed = 0
+
+    for ch in chapters:
+        print(f"\n[{ch.chapter_id}] {ch.title}")
+
+        scenes = (db.query(DBScene)
+                    .filter(DBScene.chapter_id == ch.id)
+                    .order_by(DBScene.scene_index)
+                    .all())
+
+        if scenes:
+            # Process scene by scene
+            for scene in scenes:
+                db_paras = (db.query(DBParagraph)
+                              .filter(DBParagraph.scene_id == scene.id)
+                              .order_by(DBParagraph.index)
+                              .all())
+
+                dialogue_count = sum(1 for p in db_paras if p.type == "dialogue")
+                if dialogue_count == 0:
+                    continue
+
+                print(f"  Scene {scene.scene_index}  ({len(db_paras)} paras, {dialogue_count} dialogues)")
+
+                para_dicts = [{"text": p.text, "type": p.type} for p in db_paras]
+
+                for chunk_start in range(0, len(db_paras), max_scene_size):
+                    chunk      = para_dicts[chunk_start: chunk_start + max_scene_size]
+                    db_chunk   = db_paras[chunk_start: chunk_start + max_scene_size]
+                    attributions = attribute_chunk(client, chunk, offset=chunk_start,
+                                                   system_prompt=system_prompt)
+                    for idx, speaker in attributions.items():
+                        if idx < len(db_chunk) and speaker:
+                            db_chunk[idx].speaker = speaker
+                            total_attributed += 1
+
+                time.sleep(0.3)
+        else:
+            # No scenes — process whole chapter as one chunk
+            db_paras = (db.query(DBParagraph)
+                          .filter(DBParagraph.chapter_id == ch.id)
+                          .order_by(DBParagraph.index)
+                          .all())
+
+            para_dicts = [{"text": p.text, "type": p.type} for p in db_paras]
+
+            for chunk_start in range(0, len(db_paras), max_scene_size):
+                chunk    = para_dicts[chunk_start: chunk_start + max_scene_size]
+                db_chunk = db_paras[chunk_start: chunk_start + max_scene_size]
+                attributions = attribute_chunk(client, chunk, offset=chunk_start,
+                                               system_prompt=system_prompt)
+                for idx, speaker in attributions.items():
+                    if idx < len(db_chunk) and speaker:
+                        db_chunk[idx].speaker = speaker
+                        total_attributed += 1
+
+    db.commit()
+    print(f"\nAttribution done. Total attributed: {total_attributed}")
 
 
 if __name__ == "__main__":

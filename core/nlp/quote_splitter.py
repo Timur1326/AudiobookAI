@@ -66,7 +66,8 @@ def split_paragraph(para: dict, known_speakers: set[str]) -> list[dict]:
         if not speaker and para["type"] == "dialogue":
             speaker = para.get("speaker_ground_truth") or para.get("speaker")
         parts.append(_make_para(para, quote, "dialogue", speaker))
-        return parts if len(parts) > 1 else [para]
+        # Always return converted parts (even if only 1 — the whole paragraph is a quote)
+        return parts
 
     parts = []
     cursor = 0
@@ -161,6 +162,9 @@ def process_book(data: dict, chapter_idx: int | None, preview: bool) -> dict:
         splits_in_chapter = 0
 
         for para in old_paras:
+            # Normalize type: epub parser outputs "text", we need "narration"
+            if para.get("type") == "text":
+                para["type"] = "narration"
             if _needs_splitting(para):
                 result = split_paragraph(para, known_speakers)
                 if len(result) > 1:
@@ -217,6 +221,85 @@ def run(
         print(f"\nSaved: {output_path}")
     else:
         print("\nPreview is ready.")
+
+
+def collect_speakers_from_db(book_id: int, db) -> set[str]:
+    """Collect known speaker names from DB paragraphs."""
+    from backend.models import Paragraph as DBParagraph, Chapter as DBChapter
+    rows = (db.query(DBParagraph.speaker)
+              .join(DBChapter)
+              .filter(DBChapter.book_id == book_id,
+                      DBParagraph.speaker.isnot(None))
+              .all())
+    speakers = set()
+    for (s,) in rows:
+        s = s.strip()
+        if 2 <= len(s) <= 30 and re.match(r"^[A-Za-z][A-Za-z '\-]+$", s):
+            speakers.add(s)
+    return speakers
+
+
+def run_on_db(book_id: int, db, chapter_id: int | None = None) -> None:
+    """
+    Run quote splitting directly on DB paragraphs.
+    Splits mixed paragraphs into narration + dialogue parts,
+    updates Paragraph.type and re-indexes within each chapter.
+    """
+    from backend.models import Paragraph as DBParagraph, Chapter as DBChapter
+
+    known_speakers = collect_speakers_from_db(book_id, db)
+    print(f"Known speakers: {len(known_speakers)}")
+
+    chapters_q = db.query(DBChapter).filter(DBChapter.book_id == book_id)
+    if chapter_id is not None:
+        chapters_q = chapters_q.filter(DBChapter.chapter_id == chapter_id)
+    chapters = chapters_q.order_by(DBChapter.chapter_index).all()
+
+    for ch in chapters:
+        db_paras = (db.query(DBParagraph)
+                      .filter(DBParagraph.chapter_id == ch.id)
+                      .order_by(DBParagraph.index)
+                      .all())
+
+        new_paras = []
+        splits = 0
+
+        for para in db_paras:
+            # Convert DB paragraph to dict for existing split logic
+            para_dict = {
+                "text":     para.text,
+                "type":     "narration" if para.type in ("text", "narration") else para.type,
+                "chapter_id": para.chapter_id,
+                "speaker":  para.speaker,
+            }
+
+            if _needs_splitting(para_dict):
+                result = split_paragraph(para_dict, known_speakers)
+                if len(result) > 1:
+                    splits += 1
+                new_paras.extend(result)
+            else:
+                para_dict["type"] = para_dict["type"]  # normalize "text" → "narration"
+                new_paras.append(para_dict)
+
+        # Delete old paragraphs and insert new ones with updated indexes
+        db.query(DBParagraph).filter(DBParagraph.chapter_id == ch.id).delete()
+        db.flush()
+
+        for i, p in enumerate(new_paras):
+            db.add(DBParagraph(
+                chapter_id=ch.id,
+                scene_id=None,   # scenes are re-detected in next pipeline step
+                index=i,
+                text=p["text"],
+                type=p["type"],
+                speaker=p.get("speaker") if p["type"] == "dialogue" else None,
+            ))
+
+        print(f"  [{ch.chapter_id}] {ch.title[:50]:<50} {len(db_paras)} → {len(new_paras)}  (+{splits} splits)")
+
+    db.commit()
+    print("Quote splitting done.")
 
 
 if __name__ == "__main__":

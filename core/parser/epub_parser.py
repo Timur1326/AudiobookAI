@@ -28,17 +28,15 @@ def should_skip(filename: str, raw: str) -> bool:
 
 
 def clean_text(text: str) -> str:
-    text = re.sub(r'\s+', ' ', text)        # лишние пробелы
-    text = re.sub(r'\[\d+\]', '', text)     # номера страниц [2]
+    text = re.sub(r'\s+', ' ', text)
+    text = re.sub(r'\[\d+\]', '', text)
     text = text.replace('\u201c', '"').replace('\u201d', '"')
     text = text.replace('\u2018', "'").replace('\u2019', "'")
     return text.strip()
 
 
 def get_chapter_title(element) -> str:
-    """Ищем заголовок главы рядом с div.chapter"""
     text = element.get_text(strip=True)
-    # Ищем следующий sidenote
     sidenote = element.find_next_sibling("div", class_="sidenote")
     if sidenote:
         subtitle = sidenote.get_text(separator=" ", strip=True)
@@ -59,11 +57,24 @@ def extract_h2_chapter_title(element) -> str:
 def is_chapter_heading(element) -> bool:
     if element.name == "div" and "chapter" in element.get("class", []):
         return True
+    if element.name == "h1":
+        return True
     if element.name in ("h2", "h3") and re.search(
         r"chapter", element.get_text(), re.IGNORECASE
     ):
         return True
     return False
+
+
+def _iter_body_elements(body):
+    """Yield relevant elements, flattening only <section> wrappers."""
+    for el in body.children:
+        if not hasattr(el, "name") or not el.name:
+            continue
+        if el.name == "section":
+            yield from _iter_body_elements(el)
+        else:
+            yield el
 
 
 def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
@@ -90,11 +101,49 @@ def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
     if not body:
         return chapters
 
-    for el in body.children:
+    for el in _iter_body_elements(body):
         if not hasattr(el, "name") or not el.name:
             continue
 
         classes = el.get("class", [])
+
+        # Handle <div class="chapter"> as a self-contained chapter block
+        if el.name == "div" and "chapter" in classes:
+            if current and current.paragraphs:
+                chapters.append(current)
+
+            title_el = el.find(["h1", "h2", "h3"])
+            if title_el:
+                title = clean_text(title_el.get_text(separator=" ", strip=True))
+            else:
+                title = f"Chapter {chapter_id}"
+
+            current = Chapter(
+                id=chapter_id,
+                title=title,
+                chapter_type="chapter",
+                paragraphs=[]
+            )
+            chapter_id += 1
+
+            for p_el in el.find_all("p"):
+                p_classes = p_el.get("class", [])
+                skip_cls = ["sidenote", "center", "footnote", "caption"]
+                if any(c in p_classes for c in skip_cls):
+                    continue
+                text = clean_text(p_el.get_text(separator=" ", strip=True))
+                if drop_cap_prefix:
+                    text = drop_cap_prefix + text
+                    drop_cap_prefix = ""
+                if len(text) < 10:
+                    continue
+                current.paragraphs.append(Paragraph(
+                    text=text,
+                    type="text",
+                    chapter_id=current.id
+                ))
+
+            continue
 
         if is_chapter_heading(el):
             if current and current.paragraphs:
@@ -239,3 +288,42 @@ def load_from_json(path: str) -> Book:
             ))
         book.chapters.append(ch)
     return book
+
+
+def parse_epub_to_db(epub_path: str, book_id: int, db) -> int:
+    """
+    Parse EPUB and write chapters + paragraphs directly to the database.
+    Returns total number of paragraphs inserted.
+
+    DB models are imported here to keep core/ free of backend dependencies
+    at import time — only needed when actually calling this function.
+    """
+    from backend.models import (
+        Chapter as DBChapter,
+        Paragraph as DBParagraph,
+    )
+
+    parsed = parse_epub(epub_path)
+    total_paragraphs = 0
+
+    for idx, ch in enumerate(parsed.chapters):
+        db_chapter = DBChapter(
+            book_id=book_id,
+            chapter_index=idx,
+            chapter_id=ch.id,
+            title=ch.title,
+        )
+        db.add(db_chapter)
+        db.flush()  # get db_chapter.id
+
+        for i, p in enumerate(ch.paragraphs):
+            db.add(DBParagraph(
+                chapter_id=db_chapter.id,
+                index=i,
+                text=p.text,
+                type="narration",   # default; quote_splitter will update
+                speaker=None,
+            ))
+            total_paragraphs += 1
+
+    return total_paragraphs
