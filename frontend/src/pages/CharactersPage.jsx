@@ -129,10 +129,10 @@ export default function CharactersPage() {
                 {/* Avatar */}
                 <div style={{
                   width: 48, height: 48, borderRadius: 12, flexShrink: 0,
-                  background: "#ede9fe", display: "flex",
+                  background: "#e8f4f7", display: "flex",
                   alignItems: "center", justifyContent: "center", fontSize: 22,
                 }}>
-                  <UserOutlined style={{ color: "#6366f1" }} />
+                  <UserOutlined style={{ color: "#5a9dad" }} />
                 </div>
 
                 {/* Main info */}

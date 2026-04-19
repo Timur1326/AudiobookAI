@@ -1,9 +1,10 @@
 """
-Project Gutenberg search and import via Gutendex API.
+Project Gutenberg search and import via OPDS catalog.
 """
 
+import re
 import shutil
-import tempfile
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import httpx
@@ -17,53 +18,131 @@ from backend.models import Book, Chapter, PipelineStep, StepStatus, User
 
 router = APIRouter()
 
-GUTENDEX_URL = "https://gutendex.com/books"
-STORAGE_DIR  = Path("storage/uploads")
+GUTENBERG_OPDS = "https://www.gutenberg.org/ebooks/search/"
+STORAGE_DIR    = Path("storage/uploads")
+
+_NS = {
+    "atom":   "http://www.w3.org/2005/Atom",
+    "dc":     "http://purl.org/dc/terms/",
+    "os":     "http://a9.com/-/spec/opensearch/1.1/",
+}
+
+
+def _text(el, tag: str) -> str:
+    child = el.find(tag, _NS)
+    return child.text.strip() if child is not None and child.text else ""
+
+
+def _resolve_epub_url(gutenberg_id: int) -> str | None:
+    """
+    Fetch the per-book OPDS page and return the best epub URL.
+    Prefers epub+zip without images (smaller).
+    Returns None if no epub is available (e.g. audio-only books).
+    """
+    try:
+        with httpx.Client(timeout=15, follow_redirects=True) as client:
+            resp = client.get(f"https://www.gutenberg.org/ebooks/{gutenberg_id}.opds")
+            resp.raise_for_status()
+        root = ET.fromstring(resp.content)
+    except Exception:
+        return None
+
+    noimages = None
+    images   = None
+    for el in root.iter():
+        if not el.tag.endswith("}link") and el.tag != "link":
+            continue
+        if el.get("type") != "application/epub+zip":
+            continue
+        if el.get("rel") != "http://opds-spec.org/acquisition":
+            continue
+        href = el.get("href", "")
+        if "noimages" in href:
+            noimages = href
+        else:
+            images = images or href
+
+    return noimages or images or None
 
 
 @router.get("/gutenberg/search")
 def search_gutenberg(q: str, page: int = 1):
-    """Search Project Gutenberg via Gutendex API."""
+    """Search Project Gutenberg via OPDS catalog."""
     if not q.strip():
         return {"results": [], "count": 0}
 
+    params = {"query": q.strip(), "format": "opds"}
+    if page > 1:
+        params["start_index"] = (page - 1) * 25
+
     try:
-        with httpx.Client(timeout=10, follow_redirects=True) as client:
-            resp = client.get(GUTENDEX_URL, params={"search": q, "page": page})
+        with httpx.Client(timeout=20, follow_redirects=True) as client:
+            resp = client.get(GUTENBERG_OPDS, params=params)
             resp.raise_for_status()
-            data = resp.json()
     except httpx.TimeoutException:
-        raise HTTPException(status_code=504, detail="Gutenberg API timeout")
+        raise HTTPException(status_code=504, detail="Gutenberg search timeout")
     except httpx.HTTPError as e:
         raise HTTPException(status_code=502, detail=f"Gutenberg API error: {e}")
 
-    results = []
-    for book in data.get("results", []):
-        authors = book.get("authors", [])
-        author  = authors[0]["name"] if authors else "Unknown"
+    try:
+        root = ET.fromstring(resp.content)
+    except ET.ParseError as e:
+        raise HTTPException(status_code=502, detail=f"Invalid XML from Gutenberg: {e}")
 
-        # Find best epub URL
-        formats  = book.get("formats", {})
-        epub_url = (
-            formats.get("application/epub+zip") or
-            formats.get("application/epub")
-        )
-        if not epub_url:
+    results = []
+    for entry in root.findall("atom:entry", _NS):
+        title = _text(entry, "atom:title")
+        if not title:
             continue
 
+        # ID: "https://www.gutenberg.org/ebooks/11.opds" — skip navigation entries
+        id_text = _text(entry, "atom:id")
+        m = re.search(r"/ebooks/(\d+)(?:\.opds)?$", id_text.rstrip())
+        if not m:
+            continue
+        gutenberg_id = int(m.group(1))
+
+        # Author is in <content> in search results (not <author>/<name>)
+        content_el = entry.find("atom:content", _NS)
+        author = content_el.text.strip() if content_el is not None and content_el.text else "Unknown"
+
+        # Epub URL: construct directly (reliable, works for all books)
+        epub_url = f"https://www.gutenberg.org/ebooks/{gutenberg_id}.epub.noimages"
+
+        # Subjects
+        subjects = [
+            s.text.strip()
+            for s in entry.findall("dc:subject", _NS)
+            if s.text
+        ][:3]
+
+        # Language
+        lang_el  = entry.find("dc:language", _NS)
+        lang     = lang_el.text.strip() if lang_el is not None and lang_el.text else ""
+
         results.append({
-            "id":       book["id"],
-            "title":    book.get("title", "Unknown"),
-            "author":   author,
-            "epub_url": epub_url,
-            "subjects": book.get("subjects", [])[:3],
-            "languages": book.get("languages", []),
+            "id":        gutenberg_id,
+            "title":     title,
+            "author":    author,
+            "epub_url":  epub_url,
+            "subjects":  subjects,
+            "languages": [lang] if lang else [],
         })
+
+    # OpenSearch total count
+    total_el = root.find("os:totalResults", _NS)
+    count    = int(total_el.text) if total_el is not None and total_el.text else len(results)
+
+    next_link = None
+    for link in root.findall("atom:link", _NS):
+        if link.get("rel") == "next":
+            next_link = link.get("href")
+            break
 
     return {
         "results": results,
-        "count":   data.get("count", 0),
-        "next":    data.get("next"),
+        "count":   count,
+        "next":    next_link,
     }
 
 
@@ -90,11 +169,16 @@ def import_gutenberg(body: ImportRequest, db: Session = Depends(get_db),
     book_dir = STORAGE_DIR / slug
     book_dir.mkdir(parents=True, exist_ok=True)
 
+    epub_url = _resolve_epub_url(body.gutenberg_id)
+    if not epub_url:
+        shutil.rmtree(book_dir, ignore_errors=True)
+        raise HTTPException(status_code=422, detail="No EPUB available for this book")
+
     # Download epub
     epub_path = book_dir / f"{slug}.epub"
     try:
         with httpx.Client(timeout=60, follow_redirects=True) as client:
-            resp = client.get(body.epub_url)
+            resp = client.get(epub_url)
             resp.raise_for_status()
             epub_path.write_bytes(resp.content)
     except httpx.HTTPError as e:

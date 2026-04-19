@@ -22,6 +22,31 @@ load_dotenv()
 
 MODEL = "claude-haiku-4-5-20251001"
 
+STYLE_SYSTEM_PROMPT = """\
+You are an audio director for an audiobook production.
+Given a character's description, assign ElevenLabs voice style parameters.
+
+Parameters:
+- stability (0.0-1.0): LOW = emotional/unpredictable, HIGH = calm/consistent
+- style (0.0-1.0): LOW = neutral delivery, HIGH = expressive/dramatic
+- similarity_boost (0.0-1.0): how closely to match the original voice character (usually 0.65-0.85)
+- speaker_boost (true/false): enhances voice clarity (true for most characters)
+
+Guidelines:
+- aggressive/dramatic/passionate → stability: 0.15-0.30, style: 0.75-0.95
+- nervous/timid/anxious → stability: 0.55-0.70, style: 0.20-0.40
+- calm/wise/philosophical → stability: 0.80-0.95, style: 0.05-0.20
+- curious/energetic/playful → stability: 0.35-0.55, style: 0.50-0.70
+- cold/contemptuous/aloof → stability: 0.80-0.90, style: 0.10-0.25
+- cheerful/friendly/warm → stability: 0.45-0.60, style: 0.55-0.75
+
+Return ONLY valid JSON object, no explanation:
+{
+  "Alice": {"stability": 0.4, "style": 0.6, "similarity_boost": 0.75, "speaker_boost": true},
+  "the Queen": {"stability": 0.2, "style": 0.9, "similarity_boost": 0.75, "speaker_boost": true}
+}
+"""
+
 SYSTEM_PROMPT = """\
 You are a casting director for an audiobook production.
 You will receive a list of book characters with their descriptions,
@@ -144,13 +169,11 @@ def run(
 
     print(f"{len(voices)} voices found")
 
-    # Pick narrator voice deterministically — prefer narrative_story use_case
+    RIVER_VOICE_ID = "SAz9YHcvj6GT2YYXdXww"
     narrator_voice = next(
-        (v for v in voices if v.get("use_case") == "narrative_story"),
-        None,
+        (v for v in voices if v["id"] == RIVER_VOICE_ID), None
     ) or next(
-        (v for v in voices if "narrat" in v["name"].lower()),
-        voices[0],
+        (v for v in voices if v.get("use_case") == "narrative_story"), voices[0]
     )
     print(f"Narrator:   {narrator_voice['name']} ({narrator_voice['id']})")
     print("Asking LLM to assign voices for characters...\n")
@@ -177,6 +200,52 @@ def run(
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(voice_map, f, ensure_ascii=False, indent=2)
     print(f"\nSaved: {out_path}")
+
+
+def _call_style_batch(client: anthropic.Anthropic, characters: list[dict]) -> dict:
+    """Call LLM for a single batch of characters, return style dict."""
+    chars_text = "CHARACTERS:\n"
+    for c in characters:
+        chars_text += (
+            f"- {c['name']}: personality={c['personality']}, "
+            f"voice_description={c.get('voice_description', '')}\n"
+        )
+
+    for attempt in range(5):
+        try:
+            response = client.messages.create(
+                model=MODEL,
+                max_tokens=1024,
+                system=STYLE_SYSTEM_PROMPT,
+                messages=[{"role": "user", "content": chars_text}],
+            )
+            break
+        except (anthropic.RateLimitError, anthropic.OverloadedError) as e:
+            wait = 15 * (2 ** attempt)
+            print(f"{type(e).__name__}, retrying in {wait}s...")
+            time.sleep(wait)
+    else:
+        raise RuntimeError("API overloaded after 5 retries")
+
+    raw = response.content[0].text
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
+    if not match:
+        raise ValueError(f"No JSON in style response:\n{raw}")
+    return json.loads(match.group())
+
+
+def call_llm_style(client: anthropic.Anthropic, characters: list[dict], batch_size: int = 8) -> dict:
+    """Ask LLM to assign voice style parameters, processing in batches."""
+    result = {}
+    for i in range(0, len(characters), batch_size):
+        batch = characters[i:i + batch_size]
+        print(f"  Styling batch {i // batch_size + 1}/{(len(characters) + batch_size - 1) // batch_size} ({len(batch)} characters)...")
+        try:
+            batch_result = _call_style_batch(client, batch)
+            result.update(batch_result)
+        except Exception as e:
+            print(f"  Warning: batch failed: {e}")
+    return result
 
 
 def run_on_db(book_id: int, db, engine: str = "elevenlabs") -> None:
@@ -211,10 +280,11 @@ def run_on_db(book_id: int, db, engine: str = "elevenlabs") -> None:
     voices = get_elevenlabs_voices()
     print(f"{len(voices)} voices found")
 
+    RIVER_VOICE_ID = "SAz9YHcvj6GT2YYXdXww"
     narrator_voice = next(
-        (v for v in voices if v.get("use_case") == "narrative_story"), None
+        (v for v in voices if v["id"] == RIVER_VOICE_ID), None
     ) or next(
-        (v for v in voices if "narrat" in v["name"].lower()), voices[0]
+        (v for v in voices if v.get("use_case") == "narrative_story"), voices[0]
     )
     print(f"Narrator: {narrator_voice['name']} ({narrator_voice['id']})")
 
@@ -229,11 +299,22 @@ def run_on_db(book_id: int, db, engine: str = "elevenlabs") -> None:
         for alias in c.aliases:
             name_to_char[alias.alias] = c
 
+    def find_char(name: str):
+        """Find character by exact name, then by partial match."""
+        if name in name_to_char:
+            return name_to_char[name]
+        name_lower = name.lower()
+        # Try: DB name contains LLM name or vice versa
+        for db_name, ch in name_to_char.items():
+            if name_lower in db_name.lower() or db_name.lower() in name_lower:
+                return ch
+        return None
+
     assigned = 0
     for char_name, voice_id in voice_map.items():
         if char_name == "NARRATOR":
             continue
-        db_char = name_to_char.get(char_name)
+        db_char = find_char(char_name)
         if db_char:
             db_char.voice_id = voice_id
             db_char.engine   = engine
@@ -241,6 +322,24 @@ def run_on_db(book_id: int, db, engine: str = "elevenlabs") -> None:
 
     db.commit()
     print(f"Assigned voices to {assigned}/{len(db_chars)} characters in DB.")
+
+    # Assign voice style parameters per character personality
+    print("Assigning voice style parameters...")
+    try:
+        style_map = call_llm_style(client, characters)
+        styled = 0
+        for char_name, params in style_map.items():
+            db_char = find_char(char_name)
+            if db_char:
+                db_char.voice_stability        = params.get("stability")
+                db_char.voice_style            = params.get("style")
+                db_char.voice_similarity_boost = params.get("similarity_boost")
+                db_char.voice_speaker_boost    = params.get("speaker_boost")
+                styled += 1
+        db.commit()
+        print(f"Styled {styled}/{len(db_chars)} characters in DB.")
+    except Exception as e:
+        print(f"Warning: voice style assignment failed: {e}")
 
 
 if __name__ == "__main__":

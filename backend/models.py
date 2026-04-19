@@ -82,10 +82,9 @@ class Chapter(Base):
     synth_status:  Mapped[StepStatus] = mapped_column(Enum(StepStatus), default=StepStatus.pending)
     synth_engine:  Mapped[str | None] = mapped_column(String, nullable=True)
 
-    book:           Mapped["Book"]              = relationship(back_populates="chapters")
-    scenes:         Mapped[list["Scene"]]        = relationship(back_populates="chapter", cascade="all, delete-orphan", order_by="Scene.scene_index")
-    paragraphs:     Mapped[list["Paragraph"]]   = relationship(back_populates="chapter", cascade="all, delete-orphan", order_by="Paragraph.index")
-    ambient_scenes: Mapped[list["AmbientScene"]]= relationship(back_populates="chapter", cascade="all, delete-orphan", order_by="AmbientScene.scene_index")
+    book:       Mapped["Book"]            = relationship(back_populates="chapters")
+    scenes:     Mapped[list["Scene"]]     = relationship(back_populates="chapter", cascade="all, delete-orphan", order_by="Scene.scene_index")
+    paragraphs: Mapped[list["Paragraph"]] = relationship(back_populates="chapter", cascade="all, delete-orphan", order_by="Paragraph.index")
 
 
 class Scene(Base):
@@ -96,8 +95,9 @@ class Scene(Base):
     scene_index: Mapped[int]        = mapped_column(Integer)
     preview:     Mapped[str | None] = mapped_column(Text, nullable=True)
 
-    chapter:    Mapped["Chapter"]           = relationship(back_populates="scenes")
-    paragraphs: Mapped[list["Paragraph"]]   = relationship(back_populates="scene")
+    chapter:        Mapped["Chapter"]             = relationship(back_populates="scenes")
+    paragraphs:     Mapped[list["Paragraph"]]    = relationship(back_populates="scene")
+    ambient_scenes: Mapped[list["AmbientScene"]] = relationship(back_populates="scene", cascade="all, delete-orphan")
 
 
 class Paragraph(Base):
@@ -131,16 +131,15 @@ class ParagraphTimestamp(Base):
 class AmbientScene(Base):
     __tablename__ = "ambient_scenes"
 
-    id:          Mapped[int]        = mapped_column(Integer, primary_key=True)
-    chapter_id:  Mapped[int]        = mapped_column(ForeignKey("chapters.id"), index=True)
-    engine:      Mapped[str]        = mapped_column(String)
-    scene_index: Mapped[int]        = mapped_column(Integer)
-    start:       Mapped[float | None] = mapped_column(Float, nullable=True)
-    end:         Mapped[float | None] = mapped_column(Float, nullable=True)
-    sound_url:   Mapped[str | None] = mapped_column(String, nullable=True)
-    queries:     Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON array string
+    id:        Mapped[int]           = mapped_column(Integer, primary_key=True)
+    scene_id:  Mapped[int]           = mapped_column(ForeignKey("scenes.id"), index=True)
+    engine:    Mapped[str]           = mapped_column(String)
+    start:     Mapped[float | None]  = mapped_column(Float, nullable=True)
+    end:       Mapped[float | None]  = mapped_column(Float, nullable=True)
+    sound_url: Mapped[str | None]    = mapped_column(String, nullable=True)
+    queries:   Mapped[str | None]    = mapped_column(Text, nullable=True)
 
-    chapter: Mapped["Chapter"] = relationship(back_populates="ambient_scenes")
+    scene: Mapped["Scene"] = relationship(back_populates="ambient_scenes")
 
 
 class Character(Base):
@@ -155,8 +154,12 @@ class Character(Base):
     accent:      Mapped[str | None] = mapped_column(String, nullable=True)
     voice_desc:  Mapped[str | None] = mapped_column(String, nullable=True)
     sample_text: Mapped[str | None] = mapped_column(String, nullable=True)
-    voice_id:    Mapped[str | None] = mapped_column(String, nullable=True)
-    engine:      Mapped[str | None] = mapped_column(String, nullable=True)
+    voice_id:               Mapped[str | None]   = mapped_column(String, nullable=True)
+    engine:                 Mapped[str | None]   = mapped_column(String, nullable=True)
+    voice_stability:        Mapped[float | None] = mapped_column(Float, nullable=True)
+    voice_style:            Mapped[float | None] = mapped_column(Float, nullable=True)
+    voice_similarity_boost: Mapped[float | None] = mapped_column(Float, nullable=True)
+    voice_speaker_boost:    Mapped[bool | None]  = mapped_column(nullable=True)
 
     book:    Mapped["Book"]                  = relationship(back_populates="characters")
     aliases: Mapped[list["CharacterAlias"]]  = relationship(back_populates="character", cascade="all, delete-orphan")

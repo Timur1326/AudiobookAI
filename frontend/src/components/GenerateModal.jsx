@@ -26,7 +26,7 @@ const PIPELINE_STEPS = [
 
 function StepStatusIcon({ status }) {
   if (status === "done")    return <CheckCircleFilled  style={{ color: "#22c55e", fontSize: 16 }} />;
-  if (status === "running") return <LoadingOutlined    style={{ color: "#6366f1", fontSize: 16 }} />;
+  if (status === "running") return <LoadingOutlined    style={{ color: "#5a9dad", fontSize: 16 }} />;
   if (status === "error")   return <CloseCircleFilled  style={{ color: "#ef4444", fontSize: 16 }} />;
   return <ClockCircleOutlined style={{ color: "#d1d5db", fontSize: 16 }} />;
 }
@@ -90,8 +90,7 @@ function AnalysisStep({ book, onDone, onError }) {
   return (
     <div style={{ padding: "8px 0" }}>
       <Text type="secondary" style={{ display: "block", marginBottom: 24 }}>
-        The AI will analyse your book: split dialogue, attribute speakers,
-        detect scenes and extract characters.
+        The AI will analyse your book.
       </Text>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
@@ -178,7 +177,7 @@ function VoiceCastingStep({ book, onDone }) {
   return (
     <div>
       <Text type="secondary" style={{ display: "block", marginBottom: 20 }}>
-        Review voice assignments. Click ▶ to hear a sample with the character's line.
+        Review voice assignments.
       </Text>
 
       <div style={{ display: "flex", flexDirection: "column", gap: 12, maxHeight: 380, overflowY: "auto" }}>
@@ -193,7 +192,7 @@ function VoiceCastingStep({ book, onDone }) {
               <div
                 style={{
                   width: 36, height: 36, borderRadius: 8,
-                  background: "#ede9fe", display: "flex",
+                  background: "#e8f4f7", display: "flex",
                   alignItems: "center", justifyContent: "center",
                   flexShrink: 0, fontSize: 16,
                 }}
@@ -294,7 +293,7 @@ function ChapterSelectionStep({ book, chapters, onDone }) {
             style={{
               display: "flex", alignItems: "center", gap: 12,
               padding: "10px 12px", borderRadius: 8, cursor: "pointer",
-              background: selected.includes(ch.id) ? "#ede9fe" : "#f9fafb",
+              background: selected.includes(ch.id) ? "#e8f4f7" : "#f9fafb",
               border: selected.includes(ch.id) ? "1px solid #a5b4fc" : "1px solid transparent",
               transition: "all 0.15s",
             }}
@@ -481,7 +480,7 @@ export default function GenerateModal({ open, book, chapters, onClose }) {
       width={560}
       title={
         <Space>
-          <SoundOutlined style={{ color: "#6366f1" }} />
+          <SoundOutlined style={{ color: "#5a9dad" }} />
           <span>Generate Audiobook</span>
         </Space>
       }

@@ -159,15 +159,16 @@ def list_voices(book: str, engine: str = "elevenlabs", lang: str = "en-US"):
 # ── POST /books/{book}/preview-voice ──────────────────────────────────────────
 
 class PreviewRequest(BaseModel):
-    text:     str
-    voice_id: str
-    engine:   str = "elevenlabs"
+    text:       str
+    voice_id:   str
+    engine:     str = "elevenlabs"
+    char_id:    int | None = None   # optional: apply character voice settings
 
 
 @router.post("/{book}/preview-voice")
-def preview_voice(book: str, body: PreviewRequest):
+def preview_voice(book: str, body: PreviewRequest, db: Session = Depends(get_db)):
     """Synthesize a short text sample and return audio bytes."""
-    import tempfile
+    import tempfile, os
     from fastapi.responses import Response
 
     if body.engine == "elevenlabs":
@@ -182,17 +183,32 @@ def preview_voice(book: str, body: PreviewRequest):
     else:
         raise HTTPException(status_code=400, detail=f"Unknown engine: {body.engine}")
 
-    text = body.text[:300]
+    # Apply character voice settings if char_id provided and engine is elevenlabs
+    voice_settings = None
+    if body.char_id and body.engine == "elevenlabs":
+        db_book = get_book_or_404(book, db)
+        char = db.query(Character).filter(
+            Character.id == body.char_id,
+            Character.book_id == db_book.id,
+        ).first()
+        if char and char.voice_stability is not None:
+            from elevenlabs.types import VoiceSettings
+            voice_settings = VoiceSettings(
+                stability        = char.voice_stability,
+                style            = char.voice_style            or 0.0,
+                similarity_boost = char.voice_similarity_boost or 0.75,
+                use_speaker_boost= char.voice_speaker_boost    if char.voice_speaker_boost is not None else True,
+            )
 
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         tmp_path = tmp.name
 
-    tts.synthesize(text, body.voice_id, output_path=tmp_path)
+    tts.synthesize(body.text[:300], body.voice_id, output_path=tmp_path,
+                   voice_settings=voice_settings)
 
     with open(tmp_path, "rb") as f:
         audio_bytes = f.read()
 
-    import os
     os.unlink(tmp_path)
 
     return Response(content=audio_bytes, media_type="audio/mpeg")

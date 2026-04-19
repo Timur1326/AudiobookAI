@@ -27,7 +27,7 @@ def load_json(path: Path) -> dict:
 
 
 def get_scene_ranges_from_db(db, db_chapter, engine: str) -> list[dict]:
-    """Return [{start, end, preview}] for each scene using data from the database."""
+    """Return [{scene_id, start, end, preview}] for each scene."""
     scenes = (db.query(Scene)
                 .filter(Scene.chapter_id == db_chapter.id)
                 .order_by(Scene.scene_index)
@@ -48,9 +48,13 @@ def get_scene_ranges_from_db(db, db_chapter, engine: str) -> list[dict]:
 
         start   = min(t.start for t in ts_rows) if ts_rows else None
         end     = max(t.end   for t in ts_rows) if ts_rows else None
-        preview = scene.preview or ""
 
-        ranges.append({"start": start, "end": end, "preview": preview})
+        ranges.append({
+            "scene_id": scene.id,
+            "preview":  scene.preview or "",
+            "start":    start,
+            "end":      end,
+        })
 
     return ranges
 
@@ -67,7 +71,7 @@ def freesound_search(query: str, api_key: str) -> dict | None:
                 "page_size": 5,
                 "token":     api_key,
             },
-            timeout=10,
+            timeout=4,
         )
         results = r.json().get("results", [])
         return results[0] if results else None
@@ -164,13 +168,14 @@ def _generate_ambient_bg(book: str, chapter_id: int, engine: str):
             queries_per_scene = generate_queries_llm(scenes_text)
             freesound_key     = os.environ.get("FREESOUND_API_KEY", "")
 
-            # Remove old ambient scenes for this chapter+engine
+            # Remove old ambient scenes for scenes of this chapter+engine
+            scene_ids = [r["scene_id"] for r in scene_ranges]
             db.query(AmbientScene).filter(
-                AmbientScene.chapter_id == db_chapter.id,
+                AmbientScene.scene_id.in_(scene_ids),
                 AmbientScene.engine == engine,
-            ).delete()
+            ).delete(synchronize_session=False)
 
-            for i, (queries, rng) in enumerate(zip(queries_per_scene, scene_ranges)):
+            for queries, rng in zip(queries_per_scene, scene_ranges):
                 sound_url = None
 
                 if freesound_key:
@@ -184,9 +189,8 @@ def _generate_ambient_bg(book: str, chapter_id: int, engine: str):
                         time.sleep(0.3)
 
                 db.add(AmbientScene(
-                    chapter_id=db_chapter.id,
+                    scene_id=rng["scene_id"],
                     engine=engine,
-                    scene_index=i,
                     start=rng["start"],
                     end=rng["end"],
                     sound_url=sound_url,
@@ -242,24 +246,33 @@ def get_ambient(book: str, chapter_id: int, engine: str = "elevenlabs",
     if not db_chapter:
         return {"status": status, "scenes": []}
 
-    scenes = (db.query(AmbientScene)
-                .filter(AmbientScene.chapter_id == db_chapter.id,
-                        AmbientScene.engine == engine)
-                .order_by(AmbientScene.scene_index)
-                .all())
+    db_scenes = (db.query(Scene)
+                   .filter(Scene.chapter_id == db_chapter.id)
+                   .order_by(Scene.scene_index)
+                   .all())
 
-    if scenes:
+    scene_ids = [s.id for s in db_scenes]
+    ambient_rows = (db.query(AmbientScene)
+                      .filter(AmbientScene.scene_id.in_(scene_ids),
+                              AmbientScene.engine == engine)
+                      .all())
+
+    ambient_by_scene = {a.scene_id: a for a in ambient_rows}
+
+    if ambient_rows:
         return {
             "status": "done",
             "scenes": [
                 {
                     "scene_index": s.scene_index,
-                    "start":       s.start,
-                    "end":         s.end,
-                    "sound_url":   s.sound_url,
-                    "queries":     json.loads(s.queries) if s.queries else [],
+                    "scene_id":    s.id,
+                    "start":       ambient_by_scene[s.id].start     if s.id in ambient_by_scene else None,
+                    "end":         ambient_by_scene[s.id].end       if s.id in ambient_by_scene else None,
+                    "sound_url":   ambient_by_scene[s.id].sound_url if s.id in ambient_by_scene else None,
+                    "queries":     json.loads(ambient_by_scene[s.id].queries)
+                                   if s.id in ambient_by_scene and ambient_by_scene[s.id].queries else [],
                 }
-                for s in scenes
+                for s in db_scenes
             ],
         }
 

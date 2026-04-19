@@ -4,7 +4,7 @@ import { Spin, Typography, Slider, Button, Tooltip, message, Tag } from "antd";
 import {
   ArrowLeftOutlined, LeftOutlined, RightOutlined,
   PlayCircleOutlined, PauseCircleOutlined,
-  SoundOutlined, UserOutlined, AudioOutlined,
+  SoundOutlined, UserOutlined, CloudOutlined,
   BulbOutlined, BulbFilled,
 } from "@ant-design/icons";
 import { getChapterReader, getBook, getAudioUrl, getAmbientConfig, generateAmbient } from "../api/client";
@@ -18,7 +18,7 @@ const SPEAKER_PALETTE = [
   { bg: "#dbeafe", border: "#60a5fa", text: "#1e40af" },
   { bg: "#fce7f3", border: "#f472b6", text: "#9d174d" },
   { bg: "#d1fae5", border: "#34d399", text: "#065f46" },
-  { bg: "#ede9fe", border: "#a78bfa", text: "#4c1d95" },
+  { bg: "transparent", border: "#7bb8c4", text: "#1a4a54" },
   { bg: "#fee2e2", border: "#f87171", text: "#991b1b" },
   { bg: "#e0f2fe", border: "#38bdf8", text: "#0c4a6e" },
   { bg: "#fef9c3", border: "#facc15", text: "#713f12" },
@@ -320,7 +320,7 @@ export default function ChapterPage() {
             <Tooltip title={ambientEnabled ? "Disable ambient sounds" : "Enable ambient sounds"}>
               <Button
                 size="small"
-                icon={<AudioOutlined />}
+                icon={<CloudOutlined />}
                 type={ambientEnabled ? "primary" : "default"}
                 style={ambientEnabled ? { background: "#059669", borderColor: "#059669" } : {}}
                 onClick={() => setAmbientEnabled(v => !v)}
@@ -333,7 +333,7 @@ export default function ChapterPage() {
             <Tooltip title="Generate ambient background sounds for each scene">
               <Button
                 size="small"
-                icon={<AudioOutlined />}
+                icon={<CloudOutlined />}
                 onClick={async () => {
                   const chData = bookData?.chapters?.find(c => String(c.id) === String(chapterId));
                   const engine = chData?.synth_engine || "elevenlabs";
@@ -383,15 +383,12 @@ export default function ChapterPage() {
             const isDialogue = para.type === "dialogue" && para.speaker;
             const color      = isDialogue ? speakerColors[para.speaker] : null;
 
-            // Color background only while this paragraph is actively playing
             const activeColor = isActive && showAttribution && color;
 
             const defaultText = darkMode ? "#d1d5db" : "#374151";
-            const bg         = activeColor ? color.bg   : isActive ? (darkMode ? "#1e1b4b" : "#eef2ff") : "transparent";
-            const textColor  = activeColor ? color.text : isActive ? (darkMode ? "#c7d2fe" : "#1e1b4b") : defaultText;
-            const borderLeft = activeColor ? `3px solid ${color.border}`
-                             : isActive    ? "3px solid #818cf8"
-                             : "none";
+            const textColor   = activeColor ? color.text : isActive ? (darkMode ? "#c7d2fe" : "#1e1b4b") : defaultText;
+            const activeBg     = activeColor ? color.bg     : isActive ? (darkMode ? "#1e1b4b" : "#eef2ff") : undefined;
+            const activeBorder = activeColor ? `2px solid ${color.border}` : isActive ? "2px solid #5a9dad" : undefined;
 
             return (
               <div
@@ -406,38 +403,40 @@ export default function ChapterPage() {
                   cursor:      clickable ? "pointer" : "default",
                 }}
               >
-                <p
-                  style={{
-                    flex:        1,
-                    margin:      0,
-                    fontSize:    18,
-                    lineHeight:  1.9,
-                    color:       textColor,
-                    background:  bg,
-                    borderLeft,
-                    borderRadius: 6,
-                    padding:     (isActive || activeColor) ? "4px 12px" : "0",
-                    transition:  "background 0.2s, color 0.15s",
-                  }}
-                >
-                  {para.text}
-                </p>
-                {showAttribution && isDialogue && isActive && (
-                  <div style={{ flexShrink: 0, paddingTop: 6, minWidth: 100 }}>
-                    <Tag
+                <p style={{ flex: 1, margin: 0, fontSize: 18, lineHeight: 1.9, color: defaultText }}>
+                  <span
+                    style={{
+                      color:        textColor,
+                      background:   activeBg,
+                      border:       activeBorder,
+                      borderRadius: 6,
+                      padding:      isActive ? "2px 8px" : "0",
+                      transition:   "background 0.2s, color 0.15s",
+                      display:      "inline",
+                    }}
+                  >
+                    {para.text}
+                  </span>
+                  {showAttribution && isDialogue && isActive && (
+                    <span
                       style={{
-                        background:  isActive ? "#eef2ff" : color?.bg,
-                        borderColor: isActive ? "#818cf8" : color?.border,
-                        color:       isActive ? "#1e1b4b" : color?.text,
-                        fontSize:    12,
-                        fontWeight:  600,
-                        whiteSpace:  "nowrap",
+                        display:      "inline",
+                        background:   activeColor ? color.bg : "#eef2ff",
+                        border:       activeColor ? `2px solid ${color.border}` : "2px solid #5a9dad",
+                        borderRadius: 6,
+                        padding:      "2px 8px",
+                        marginLeft:   8,
+                        color:        activeColor ? color.text : "#1e1b4b",
+                        fontSize:     13,
+                        fontWeight:   600,
+                        whiteSpace:   "nowrap",
+                        verticalAlign: "middle",
                       }}
                     >
                       {para.speaker}
-                    </Tag>
-                  </div>
-                )}
+                    </span>
+                  )}
+                </p>
               </div>
             );
           })}
@@ -446,13 +445,13 @@ export default function ChapterPage() {
 
       {/* ── Player bar ── */}
       <div style={{
-        background: "#1e1b4b", color: "#fff",
+        background: "#5a9dad", color: "#fff",
         padding: "14px 24px 18px", flexShrink: 0,
-        boxShadow: "0 -4px 20px rgba(0,0,0,0.15)",
+        boxShadow: "0 -4px 20px rgba(0,0,0,0.12)",
       }}>
         {!hasAudio && (
           <div style={{ textAlign: "center", marginBottom: 10 }}>
-            <Text style={{ color: "#6366f1", fontSize: 12 }}>
+            <Text style={{ color: "rgba(255,255,255,0.75)", fontSize: 12 }}>
               Audio not synthesized yet. Use Generate Audiobook to create it.
             </Text>
           </div>
@@ -460,7 +459,7 @@ export default function ChapterPage() {
 
         {/* Seek bar */}
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
-          <Text style={{ color: "#a5b4fc", fontSize: 12, width: 38, flexShrink: 0 }}>
+          <Text style={{ color: "#c8e6ee", fontSize: 12, width: 38, flexShrink: 0 }}>
             {formatTime(currentTime)}
           </Text>
           <Slider
@@ -470,22 +469,22 @@ export default function ChapterPage() {
             disabled={!hasAudio}
             tooltip={{ formatter: (v) => formatTime(v) }}
             style={{ flex: 1, margin: 0 }}
-            styles={{ track: { background: "#818cf8" }, handle: { borderColor: "#818cf8" } }}
+            styles={{ track: { background: "rgba(255,255,255,0.9)" }, handle: { borderColor: "#fff", background: "#fff" } }}
           />
-          <Text style={{ color: "#a5b4fc", fontSize: 12, width: 38, flexShrink: 0, textAlign: "right" }}>
+          <Text style={{ color: "#c8e6ee", fontSize: 12, width: 38, flexShrink: 0, textAlign: "right" }}>
             {formatTime(duration)}
           </Text>
         </div>
 
         {/* Controls */}
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, paddingLeft: 60 }}>
 
           {/* -5s */}
           <Tooltip title="−5 sec  (←)">
             <Button
               type="text" shape="circle"
               disabled={!hasAudio}
-              icon={<span style={{ fontSize: 13, color: hasAudio ? "#a5b4fc" : "#4a4870" }}>−5</span>}
+              icon={<span style={{ fontSize: 13, color: hasAudio ? "#c8e6ee" : "#7fb3bf" }}>−5</span>}
               onClick={() => seek(currentTime - 5)}
             />
           </Tooltip>
@@ -495,8 +494,8 @@ export default function ChapterPage() {
             type="text" shape="circle"
             disabled={!hasAudio}
             icon={playing
-              ? <PauseCircleOutlined style={{ fontSize: 40, color: hasAudio ? "#fff" : "#4a4870" }} />
-              : <PlayCircleOutlined  style={{ fontSize: 40, color: hasAudio ? "#fff" : "#4a4870" }} />
+              ? <PauseCircleOutlined style={{ fontSize: 40, color: hasAudio ? "#fff" : "#7fb3bf" }} />
+              : <PlayCircleOutlined  style={{ fontSize: 40, color: hasAudio ? "#fff" : "#7fb3bf" }} />
             }
             onClick={togglePlay}
             style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
@@ -507,7 +506,7 @@ export default function ChapterPage() {
             <Button
               type="text" shape="circle"
               disabled={!hasAudio}
-              icon={<span style={{ fontSize: 13, color: hasAudio ? "#a5b4fc" : "#4a4870" }}>+5</span>}
+              icon={<span style={{ fontSize: 13, color: hasAudio ? "#c8e6ee" : "#7fb3bf" }}>+5</span>}
               onClick={() => seek(currentTime + 5)}
             />
           </Tooltip>
@@ -519,7 +518,7 @@ export default function ChapterPage() {
               disabled={!hasAudio}
               onClick={cycleSpeed}
               style={{
-                color: hasAudio ? "#a5b4fc" : "#4a4870", fontWeight: 600, fontSize: 13,
+                color: hasAudio ? "#c8e6ee" : "#7fb3bf", fontWeight: 600, fontSize: 13,
                 minWidth: 44, padding: "0 8px",
               }}
             >
@@ -528,24 +527,22 @@ export default function ChapterPage() {
           </Tooltip>
 
           {/* Volume */}
-          <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 8 }}>
-            <SoundOutlined style={{ color: hasAudio ? "#a5b4fc" : "#4a4870", fontSize: 14 }} />
-            <Slider
-              min={0} max={1} step={0.05}
-              value={volume}
-              onChange={setVolume}
-              disabled={!hasAudio}
-              style={{ width: 80, margin: 0 }}
-              tooltip={{ formatter: v => `${Math.round(v * 100)}%` }}
-              styles={{ track: { background: "#818cf8" }, handle: { borderColor: "#818cf8" } }}
-            />
-          </div>
+          <SoundOutlined style={{ color: hasAudio ? "#c8e6ee" : "#7fb3bf", fontSize: 14 }} />
+          <Slider
+            min={0} max={1} step={0.05}
+            value={volume}
+            onChange={setVolume}
+            disabled={!hasAudio}
+            style={{ width: 80, margin: 0 }}
+            tooltip={{ formatter: v => `${Math.round(v * 100)}%` }}
+            styles={{ track: { background: "rgba(255,255,255,0.9)" }, handle: { borderColor: "#fff", background: "#fff" } }}
+          />
 
-          {/* Ambient volume — shown only when ambient is enabled and ready */}
+          {/* Ambient volume */}
           {ambientEnabled && ambientStatus === "done" && ambientScenes.some(s => s.sound_url) && (
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginLeft: 16,
-                          borderLeft: "1px solid #312e81", paddingLeft: 16 }}>
-              <AudioOutlined style={{ color: "#34d399", fontSize: 14 }} />
+            <div style={{ display: "flex", alignItems: "center", gap: 8,
+                          borderLeft: "1px solid #4a8a9a", paddingLeft: 8 }}>
+              <CloudOutlined style={{ color: "#34d399", fontSize: 14 }} />
               <Slider
                 min={0} max={0.30} step={0.01}
                 value={ambientVolume}

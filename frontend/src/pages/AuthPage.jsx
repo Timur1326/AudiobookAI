@@ -38,8 +38,8 @@ export default function AuthPage() {
     }}>
       <Card style={{ width: 380, borderRadius: 12 }}>
         <div style={{ textAlign: "center", marginBottom: 24 }}>
-          <AudioOutlined style={{ fontSize: 28, color: "#6366f1" }} />
-          <Title level={4} style={{ margin: "8px 0 0" }}>Audiobook Studio</Title>
+          <AudioOutlined style={{ fontSize: 28, color: "#5a9dad" }} />
+          <Title level={4} style={{ margin: "8px 0 0" }}>AudiobookAI</Title>
         </div>
 
         <Tabs

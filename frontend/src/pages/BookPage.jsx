@@ -2,12 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import {
   Typography, Spin, Button, Tag, Steps, Card,
-  List, message, Tooltip, Row, Col,
+  List, message, Tooltip,
 } from "antd";
 import {
   ArrowLeftOutlined, CheckCircleFilled, ClockCircleOutlined,
-  LoadingOutlined, CloseCircleFilled, BookOutlined,
-  FileTextOutlined, SoundOutlined, TeamOutlined, ThunderboltOutlined,
+  LoadingOutlined, CloseCircleFilled,
+  TeamOutlined, ThunderboltOutlined,
   DownloadOutlined,
 } from "@ant-design/icons";
 import { getBook } from "../api/client";
@@ -74,7 +74,7 @@ function StatCard({ icon, label, value }) {
         <div
           style={{
             width: 40, height: 40, borderRadius: 10,
-            background: "#ede9fe", display: "flex",
+            background: "#e8f4f7", display: "flex",
             alignItems: "center", justifyContent: "center",
             flexShrink: 0,
           }}
@@ -106,7 +106,6 @@ export default function BookPage() {
       .catch(() => message.error("Failed to load book"))
       .finally(() => setLoading(false));
 
-  // Poll while pipeline is running
   useEffect(() => {
     if (!data) return;
     const isRunning = data.steps?.some(s => s.status === "running");
@@ -126,6 +125,8 @@ export default function BookPage() {
   }, [data]);
 
   useEffect(() => { load(); }, [book]);
+
+
 
   if (loading) return (
     <div style={{ textAlign: "center", paddingTop: 100 }}>
@@ -184,38 +185,6 @@ export default function BookPage() {
           </Button>
         </div>
       </div>
-
-      {/* Stats row */}
-      <Row gutter={[16, 16]} style={{ marginBottom: 24 }}>
-        <Col xs={12} sm={8} md={6}>
-          <StatCard
-            icon={<FileTextOutlined style={{ color: "#6366f1" }} />}
-            label="Chapters"
-            value={data.chapters?.length ?? "—"}
-          />
-        </Col>
-        <Col xs={12} sm={8} md={6}>
-          <StatCard
-            icon={<BookOutlined style={{ color: "#6366f1" }} />}
-            label="Steps done"
-            value={`${doneSteps}/${totalSteps}`}
-          />
-        </Col>
-        <Col xs={12} sm={8} md={6}>
-          <StatCard
-            icon={<TeamOutlined style={{ color: "#6366f1" }} />}
-            label="Characters"
-            value={data.characters_count ?? "—"}
-          />
-        </Col>
-        <Col xs={12} sm={8} md={6}>
-          <StatCard
-            icon={<SoundOutlined style={{ color: "#6366f1" }} />}
-            label="Audio ready"
-            value={data.chapters?.filter(c => c.synth_status === "done").length ?? 0}
-          />
-        </Col>
-      </Row>
 
       {/* Pipeline stepper */}
       {data.steps?.length > 0 && <PipelineCard steps={data.steps} />}

@@ -290,6 +290,51 @@ def load_from_json(path: str) -> Book:
     return book
 
 
+def extract_cover(epub_path: str, dest_dir: str) -> str | None:
+    """
+    Extract cover image from EPUB and save to dest_dir/cover.jpg (or .png).
+    Returns the saved path, or None if no cover found.
+    """
+    import mimetypes
+    epub_book = epub.read_epub(epub_path)
+
+    # Try common cover item IDs
+    cover_item = None
+    for item_id in ("cover-image", "cover", "Cover", "CoverImage"):
+        cover_item = epub_book.get_item_with_id(item_id)
+        if cover_item:
+            break
+
+    # Fallback: find first image item with "cover" in name
+    if not cover_item:
+        for item in epub_book.get_items_of_type(ebooklib.ITEM_IMAGE):
+            if "cover" in item.file_name.lower():
+                cover_item = item
+                break
+
+    # Fallback: find cover via metadata
+    if not cover_item:
+        meta = epub_book.get_metadata("OPF", "cover")
+        if meta:
+            cover_id = meta[0][1].get("content") if meta[0][1] else None
+            if cover_id:
+                cover_item = epub_book.get_item_with_id(cover_id)
+
+    if not cover_item:
+        return None
+
+    content = cover_item.get_content()
+    media_type = cover_item.media_type or "image/jpeg"
+    ext = mimetypes.guess_extension(media_type) or ".jpg"
+    if ext == ".jpe":
+        ext = ".jpg"
+
+    out_path = os.path.join(dest_dir, f"cover{ext}")
+    with open(out_path, "wb") as f:
+        f.write(content)
+    return out_path
+
+
 def parse_epub_to_db(epub_path: str, book_id: int, db) -> int:
     """
     Parse EPUB and write chapters + paragraphs directly to the database.
@@ -305,6 +350,10 @@ def parse_epub_to_db(epub_path: str, book_id: int, db) -> int:
 
     parsed = parse_epub(epub_path)
     total_paragraphs = 0
+
+    # Extract cover image
+    book_dir = os.path.dirname(epub_path)
+    extract_cover(epub_path, book_dir)
 
     for idx, ch in enumerate(parsed.chapters):
         db_chapter = DBChapter(

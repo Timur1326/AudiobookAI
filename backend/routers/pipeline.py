@@ -72,12 +72,7 @@ def run_pipeline_steps(book_slug: str, book_id: int, steps: List[int], engine: s
                     return
 
             elif step_num == 4:
-                from backend.models import Character as DBCharacter
-                if check_db.query(DBCharacter).filter(DBCharacter.book_id == book_id).count() > 0:
-                    set_step_status(book_id, step_num, StepStatus.done)
-                    return
-
-            elif step_num == 5:
+                # Step 4 = Attribute dialogue (runs first, without character list)
                 from backend.models import Paragraph as DBParagraph, Chapter as DBChapter
                 total_d = (check_db.query(DBParagraph)
                            .join(DBChapter)
@@ -91,6 +86,13 @@ def run_pipeline_steps(book_slug: str, book_id: int, steps: List[int], engine: s
                                       DBParagraph.speaker.isnot(None))
                               .count())
                 if total_d > 0 and attributed / total_d >= 0.8:
+                    set_step_status(book_id, step_num, StepStatus.done)
+                    return
+
+            elif step_num == 5:
+                # Step 5 = Extract characters (runs after attribution)
+                from backend.models import Character as DBCharacter
+                if check_db.query(DBCharacter).filter(DBCharacter.book_id == book_id).count() > 0:
                     set_step_status(book_id, step_num, StepStatus.done)
                     return
 
@@ -118,12 +120,14 @@ def run_pipeline_steps(book_slug: str, book_id: int, steps: List[int], engine: s
                 scene_run_on_db(book_id=book_id, db=db)
 
             elif step_num == 4:
-                from core.nlp.character_extractor import run_on_db as char_run_on_db
-                char_run_on_db(book_id=book_id, db=db)
-
-            elif step_num == 5:
+                # Attribution first — LLM attributes from context without character list
                 from core.nlp.llm_attributor_with_context import run_on_db as attr_run_on_db
                 attr_run_on_db(book_id=book_id, db=db)
+
+            elif step_num == 5:
+                # Extraction after attribution — uses clean LLM-attributed speakers
+                from core.nlp.character_extractor import run_on_db as char_run_on_db
+                char_run_on_db(book_id=book_id, db=db)
 
             elif step_num == 6:
                 from core.nlp.voice_assigner import run_on_db as voice_run_on_db
@@ -307,19 +311,6 @@ def _synthesize_chapters_bg(book_slug: str, book_id: int, chapter_ids: List[int]
     """Synthesize chapters sequentially in background thread."""
     import synthesize_chapter as sc
 
-    base = STORAGE_DIR / book_slug
-    for name in ("parsed_with_scenes.json", "ground_truth_fixed.json", "parsed_final.json"):
-        p = base / name
-        if p.exists():
-            with open(p, encoding="utf-8") as f:
-                data = json.load(f)
-            break
-    else:
-        return
-
-    voice_map = sc.load_voice_map(book_slug, engine)
-    chapters  = data["chapters"]
-
     for ch_id in chapter_ids:
         db = SessionLocal()
         try:
@@ -335,25 +326,25 @@ def _synthesize_chapters_bg(book_slug: str, book_id: int, chapter_ids: List[int]
                 continue
 
             db_ch.synth_status = StepStatus.running
+            db_ch.synth_engine = engine
             db.commit()
 
-            idx = next((i for i, c in enumerate(chapters) if c["id"] == ch_id), None)
-            if idx is None:
-                db_ch.synth_status = StepStatus.error
-                db_ch.synth_engine = engine
-                db.commit()
-                continue
-
-            result = sc.synthesize_chapter(book_slug, idx, engine, voice_map, use_voice_map=True, narrator_style=narrator_style)
+            result = sc.synthesize_chapter_from_db(
+                book_slug=book_slug,
+                chapter_id=ch_id,
+                engine=engine,
+                db=db,
+                narrator_style=narrator_style,
+            )
 
             db_ch.synth_status = StepStatus.done if result else StepStatus.error
             db_ch.audio_path   = str(result) if result else None
-            db_ch.synth_engine = engine
             db.commit()
 
         except Exception as e:
             try:
                 db_ch.synth_status = StepStatus.error
+                db_ch.synth_engine = engine
                 db.commit()
             except Exception:
                 pass

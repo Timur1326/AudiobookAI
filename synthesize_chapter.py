@@ -238,6 +238,14 @@ def get_voice(speaker: str | None, voice_map: dict, alias_map: dict, narrator_vo
         return voice_map[s]
     if s in alias_map:
         return alias_map[s]
+    # Fuzzy fallback: check if speaker contains or is contained by a known name
+    s_lower = s.lower()
+    for key in voice_map:
+        if key == "NARRATOR":
+            continue
+        k_lower = key.lower()
+        if s_lower in k_lower or k_lower in s_lower:
+            return voice_map[key]
     return voice_map.get("NARRATOR", narrator_voice)
 
 
@@ -498,6 +506,21 @@ def synthesize_chapter_from_db(
         for alias in c.aliases:
             voice_map[alias.alias] = c.voice_id
 
+    # Build style map: character name → VoiceSettings
+    style_map: dict = {}
+    if engine == "elevenlabs":
+        from elevenlabs.types import VoiceSettings
+        for c in chars:
+            if c.voice_stability is not None:
+                style_map[c.name] = VoiceSettings(
+                    stability        = c.voice_stability,
+                    style            = c.voice_style            or 0.0,
+                    similarity_boost = c.voice_similarity_boost or 0.75,
+                    use_speaker_boost= c.voice_speaker_boost    if c.voice_speaker_boost is not None else True,
+                )
+                for alias in c.aliases:
+                    style_map[alias.alias] = style_map[c.name]
+
     # Convert DB paragraphs to dicts (reuses existing synthesis logic)
     paragraphs = [
         {
@@ -561,7 +584,19 @@ def synthesize_chapter_from_db(
         print(f"  [{i+1}/{len(paragraphs)}] {label} {text[:60]}...")
 
         is_narrator = para_type != "dialogue"
-        vs = narrator_voice_settings if (is_narrator and narrator_voice_settings) else None
+        if is_narrator:
+            vs = narrator_voice_settings
+        else:
+            vs = None
+            if speaker:
+                vs = style_map.get(speaker)
+                if vs is None:
+                    # Fuzzy fallback for style_map same as voice_map
+                    s_lower = speaker.lower()
+                    for key in style_map:
+                        if s_lower in key.lower() or key.lower() in s_lower:
+                            vs = style_map[key]
+                            break
 
         try:
             tts.synthesize(text=text, voice_id=voice_id, output_path=out_file,

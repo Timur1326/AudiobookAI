@@ -200,6 +200,34 @@ def get_book(book: str, db: Session = Depends(get_db)):
     }
 
 
+# ── GET /books/{book}/cover ───────────────────────────────────────────────────
+
+@router.get("/{book}/cover")
+def get_book_cover(book: str, db: Session = Depends(get_db)):
+    """Return the cover image for a book. Extracts it on first request if missing."""
+    from fastapi.responses import FileResponse
+    book_dir = STORAGE_DIR / book
+
+    # Return existing cover
+    for ext in ("jpg", "jpeg", "png", "webp"):
+        cover = book_dir / f"cover.{ext}"
+        if cover.exists():
+            return FileResponse(str(cover))
+
+    # Try to extract from epub
+    db_book = db.query(Book).filter(Book.slug == book).first()
+    if db_book and db_book.epub_path:
+        try:
+            from core.parser.epub_parser import extract_cover
+            result = extract_cover(db_book.epub_path, str(book_dir))
+            if result:
+                return FileResponse(result)
+        except Exception:
+            pass
+
+    raise HTTPException(status_code=404, detail="No cover image found")
+
+
 # ── DELETE /books/{book} ──────────────────────────────────────────────────────
 
 @router.delete("/{book}")

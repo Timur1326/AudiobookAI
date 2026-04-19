@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import {
-  Card, Col, Row, Typography, Spin, Empty, Button, Progress,
+  Card, Col, Row, Typography, Spin, Empty, Button,
   Tag, Modal, Upload, message, Popconfirm, Tooltip, Input, List, Avatar,
 } from "antd";
 import {
@@ -42,7 +42,39 @@ function currentStepLabel(steps) {
   if (!pending) return { label: "Complete", color: "#22c55e" };
   const lastDone = [...entries].reverse().find(e => e.status === "done");
   if (!lastDone) return { label: "Not started", color: "#9ca3af" };
-  return { label: STEP_LABELS[pending.step], color: "#6366f1" };
+  return { label: STEP_LABELS[pending.step], color: "#5a9dad" };
+}
+
+function BookCover({ slug }) {
+  const [error, setError] = useState(false);
+  const src = `${import.meta.env.VITE_API_URL || "http://localhost:8000"}/books/${slug}/cover`;
+
+  if (error) {
+    return (
+      <div style={{
+        width: 72, height: 100, borderRadius: 8, flexShrink: 0,
+        background: "#e8f4f7", display: "flex",
+        alignItems: "center", justifyContent: "center",
+      }}>
+        <BookOutlined style={{ fontSize: 28, color: "#5a9dad" }} />
+      </div>
+    );
+  }
+
+  return (
+    <div style={{
+      width: 72, height: 100, borderRadius: 8, flexShrink: 0,
+      background: "#f0f2f5", overflow: "hidden",
+      display: "flex", alignItems: "center", justifyContent: "center",
+    }}>
+      <img
+        src={src}
+        alt="cover"
+        onError={() => setError(true)}
+        style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }}
+      />
+    </div>
+  );
 }
 
 function BookCard({ book, onDelete }) {
@@ -56,47 +88,21 @@ function BookCard({ book, onDelete }) {
     <Card
       hoverable
       style={{ borderRadius: 12, overflow: "hidden" }}
-      styles={{ body: { padding: "20px 20px 16px" } }}
+      styles={{ body: { padding: "16px" } }}
     >
-      <div
-        style={{
-          width: 48, height: 48, borderRadius: 12,
-          background: "#ede9fe", display: "flex",
-          alignItems: "center", justifyContent: "center",
-          marginBottom: 14,
-        }}
-      >
-        <BookOutlined style={{ fontSize: 22, color: "#6366f1" }} />
-      </div>
-
-      <Text strong style={{ fontSize: 15, display: "block", lineHeight: 1.3, marginBottom: 4 }}>
-        {book.title || book.slug}
-      </Text>
-      <Text type="secondary" style={{ fontSize: 13 }}>
-        {book.author || "Unknown author"}
-      </Text>
-
-      <div style={{ marginTop: 16 }}>
-        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 4 }}>
-          <Text style={{ fontSize: 12, color: "#6b7280" }}>
-            {stepInfo && (
-              <Tag color={stepInfo.color} style={{ fontSize: 11, marginRight: 0 }}>
-                {stepInfo.label}
-              </Tag>
-            )}
+      <div style={{ display: "flex", gap: 14, marginBottom: 14 }}>
+        <BookCover slug={book.slug} />
+        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", justifyContent: "center" }}>
+          <Text strong style={{ fontSize: 14, display: "block", lineHeight: 1.4, marginBottom: 4 }}>
+            {book.title || book.slug}
           </Text>
-          <Text style={{ fontSize: 12, color: "#6b7280" }}>{done}/{total}</Text>
+          <Text type="secondary" style={{ fontSize: 12 }}>
+            {book.author || "Unknown author"}
+          </Text>
         </div>
-        <Progress
-          percent={percent}
-          showInfo={false}
-          strokeColor="#6366f1"
-          trailColor="#e0e7ff"
-          size="small"
-        />
       </div>
 
-      <div style={{ display: "flex", gap: 4, marginTop: 10, marginBottom: 16 }}>
+      <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
         {Array.from({ length: total }, (_, i) => {
           const s = book.steps?.[String(i + 1)] ?? "pending";
           return (
@@ -165,7 +171,7 @@ function UploadModal({ open, onClose, onUploaded }) {
         style={{ padding: "12px 0" }}
       >
         <p className="ant-upload-drag-icon">
-          <InboxOutlined style={{ color: "#6366f1" }} />
+          <InboxOutlined style={{ color: "#5a9dad" }} />
         </p>
         <p className="ant-upload-text">Click or drag EPUB file here</p>
         <p className="ant-upload-hint" style={{ color: "#9ca3af" }}>Only .epub format is supported</p>
@@ -230,7 +236,7 @@ function GutenbergModal({ open, onClose, onImported }) {
     <Modal
       title={
         <span>
-          <SearchOutlined style={{ marginRight: 8, color: "#6366f1" }} />
+          <SearchOutlined style={{ marginRight: 8, color: "#5a9dad" }} />
           Search Project Gutenberg
         </span>
       }
@@ -240,7 +246,7 @@ function GutenbergModal({ open, onClose, onImported }) {
       width={600}
     >
       <Text type="secondary" style={{ display: "block", marginBottom: 16, fontSize: 13 }}>
-        Free public domain books (pre-1928). No copyright restrictions.
+        Free public domain books.
       </Text>
 
       <Search
@@ -283,7 +289,7 @@ function GutenbergModal({ open, onClose, onImported }) {
               <List.Item.Meta
                 avatar={
                   <Avatar
-                    style={{ background: "#ede9fe", color: "#6366f1" }}
+                    style={{ background: "#e8f4f7", color: "#5a9dad" }}
                     icon={<BookOutlined />}
                   />
                 }

@@ -30,9 +30,9 @@ function AppHeader() {
       height: 56,
     }}>
       <Space style={{ cursor: "pointer", userSelect: "none" }} onClick={() => navigate("/")}>
-        <AudioOutlined style={{ fontSize: 20, color: "#6366f1" }} />
+        <AudioOutlined style={{ fontSize: 20, color: "#5a9dad" }} />
         <Typography.Text style={{ fontSize: 16, fontWeight: 700, color: "#1a1a2e" }}>
-          Audiobook Studio
+          AudiobookAI
         </Typography.Text>
       </Space>
 
@@ -60,7 +60,7 @@ export default function App() {
   return (
     <ConfigProvider theme={{
       token: {
-        colorPrimary: "#6366f1",
+        colorPrimary: "#5a9dad",
         borderRadius: 10,
         fontFamily: "Inter, system-ui, sans-serif",
       },

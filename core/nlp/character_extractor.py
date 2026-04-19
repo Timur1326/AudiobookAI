@@ -25,25 +25,27 @@ MODEL = "claude-sonnet-4-6"  # needs reasoning about the whole book
 
 
 SYSTEM_PROMPT = """\
-You are a literary analyst. Your task is to extract all speaking characters from a novel.
+You are a literary analyst. Your task is to extract ALL speaking characters from a novel.
 
 For each character return:
 - name: the most common form of their name as it appears in the text
-- aliases: other names/titles used for this character (e.g. ["the White Rabbit", "Rabbit"])
 - gender: "male" / "female" / "unknown"
 - age: "child" / "young_adult" / "middle_aged" / "old" / "unknown"
 - personality: 2-4 adjectives describing their character (e.g. "curious, brave, impulsive")
 - accent: best guess at accent/nationality based on context (e.g. "british", "american", "unknown")
 - voice_description: 1-2 sentences describing what their voice should sound like for an audiobook
 
-Only include characters who actually speak (have dialogue lines).
-Exclude narrators and unnamed background characters.
+Rules:
+- Include EVERY character who has dialogue lines — do not skip any
+- One entry per character — use the most common name from the speaker list
+- Do NOT merge names or assign aliases
+- Ignore speaker names that are clearly automated attribution errors (common words, verb fragments)
+- Do NOT include narrators or unnamed crowd characters
 
 Return ONLY valid JSON array, no explanation:
 [
   {
     "name": "Alice",
-    "aliases": [],
     "gender": "female",
     "age": "child",
     "personality": "curious, brave, imaginative, polite",
@@ -87,7 +89,7 @@ def call_llm(client: anthropic.Anthropic, data: dict) -> list[dict]:
         try:
             response = client.messages.create(
                 model=MODEL,
-                max_tokens=4096,
+                max_tokens=8192,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -159,6 +161,7 @@ def run(
 
 def build_prompt_from_db(book_id: int, db) -> str:
     """Build LLM prompt using dialogue paragraphs from DB."""
+    from collections import Counter
     from backend.models import Paragraph as DBParagraph, Chapter as DBChapter, Book as DBBook
 
     db_book = db.query(DBBook).filter(DBBook.id == book_id).first()
@@ -172,8 +175,20 @@ def build_prompt_from_db(book_id: int, db) -> str:
                       DBParagraph.speaker.isnot(None))
               .all())
 
+    # Count frequency of each speaker name
+    freq: Counter = Counter(p.speaker for p in rows)
+
+    # Filter: keep only speakers that appear 2+ times and look like proper names
+    # (capitalized, 3+ chars, not purely lowercase common words)
+    valid_speakers = {
+        name for name, count in freq.items()
+        if count >= 2 and len(name) >= 3 and name[0].isupper()
+    }
+
     samples: dict[str, list[str]] = {}
     for p in rows:
+        if p.speaker not in valid_speakers:
+            continue
         if p.speaker not in samples:
             samples[p.speaker] = []
         if len(samples[p.speaker]) < 3:
@@ -193,7 +208,7 @@ def run_on_db(book_id: int, db) -> None:
     Extract characters from DB paragraphs and save directly to DB.
     Creates Character + CharacterAlias records.
     """
-    from backend.models import Character as DBCharacter, CharacterAlias
+    from backend.models import Character as DBCharacter
 
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -211,7 +226,7 @@ def run_on_db(book_id: int, db) -> None:
         try:
             response = client.messages.create(
                 model=MODEL,
-                max_tokens=4096,
+                max_tokens=8192,
                 system=SYSTEM_PROMPT,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -231,7 +246,12 @@ def run_on_db(book_id: int, db) -> None:
 
     print(f"Found {len(characters)} characters")
 
-    # Clear existing characters for this book
+    # Clear existing characters and their aliases for this book
+    # (bulk delete bypasses ORM cascade, so delete aliases explicitly first)
+    from backend.models import CharacterAlias
+    char_ids = [c.id for c in db.query(DBCharacter.id).filter(DBCharacter.book_id == book_id).all()]
+    if char_ids:
+        db.query(CharacterAlias).filter(CharacterAlias.character_id.in_(char_ids)).delete(synchronize_session=False)
     db.query(DBCharacter).filter(DBCharacter.book_id == book_id).delete()
     db.flush()
 
@@ -251,10 +271,6 @@ def run_on_db(book_id: int, db) -> None:
         )
         db.add(db_char)
         db.flush()
-
-        for alias in c.get("aliases", []):
-            if alias and alias.strip():
-                db.add(CharacterAlias(character_id=db_char.id, alias=alias.strip()))
 
     db.commit()
     print(f"Saved {len(characters)} characters to DB.")

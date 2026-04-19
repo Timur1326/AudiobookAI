@@ -415,8 +415,9 @@ def run_on_db(book_id: int, db, chapter_id: int | None = None,
                     attributions = attribute_chunk(client, chunk, offset=chunk_start,
                                                    system_prompt=system_prompt)
                     for idx, speaker in attributions.items():
-                        if idx < len(db_chunk) and speaker:
-                            db_chunk[idx].speaker = speaker
+                        local_idx = idx - chunk_start
+                        if 0 <= local_idx < len(db_chunk) and speaker:
+                            db_chunk[local_idx].speaker = speaker
                             total_attributed += 1
 
                 time.sleep(0.3)
@@ -435,8 +436,9 @@ def run_on_db(book_id: int, db, chapter_id: int | None = None,
                 attributions = attribute_chunk(client, chunk, offset=chunk_start,
                                                system_prompt=system_prompt)
                 for idx, speaker in attributions.items():
-                    if idx < len(db_chunk) and speaker:
-                        db_chunk[idx].speaker = speaker
+                    local_idx = idx - chunk_start
+                    if 0 <= local_idx < len(db_chunk) and speaker:
+                        db_chunk[local_idx].speaker = speaker
                         total_attributed += 1
 
     db.commit()
