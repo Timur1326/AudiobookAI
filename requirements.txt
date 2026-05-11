@@ -1,3 +1,6 @@
+# Environment
+python-dotenv
+
 # Web framework
 fastapi
 uvicorn[standard]
@@ -15,9 +18,6 @@ email-validator
 # EPUB parsing
 ebooklib
 beautifulsoup4
-
-# NLP
-spacy
 
 # TTS engines
 elevenlabs
