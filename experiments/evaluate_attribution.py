@@ -1,11 +1,11 @@
 """
 Dialogue attribution evaluation: LLM context method vs ground truth.
 
-Usage:
-    python evaluate_attribution.py alice
-    python evaluate_attribution.py alice --by-chapter
-    python evaluate_attribution.py alice --by-character
-    python evaluate_attribution.py pride_prejudice --gt storage/uploads/pride_prejudice/ground_truth.json
+Usage (run from project root):
+    python experiments/evaluate_attribution.py alice
+    python experiments/evaluate_attribution.py alice --by-chapter
+    python experiments/evaluate_attribution.py alice --by-character
+    python experiments/evaluate_attribution.py pride_prejudice --gt storage/uploads/pride_prejudice/ground_truth.json
 """
 
 import argparse

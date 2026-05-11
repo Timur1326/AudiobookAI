@@ -16,6 +16,10 @@ SQLALCHEMY_DATABASE_URL = os.environ.get(
 
 connect_args = {"check_same_thread": False, "timeout": 30} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
 
+if SQLALCHEMY_DATABASE_URL.startswith("sqlite:///"):
+    _db_path = SQLALCHEMY_DATABASE_URL[len("sqlite:///"):]
+    os.makedirs(os.path.dirname(os.path.abspath(_db_path)), exist_ok=True)
+
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args=connect_args)
 
 if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):

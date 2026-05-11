@@ -1,10 +1,14 @@
 """
-Handy tool for annotating dialogue speakers in the parsed JSON. It shows the dialogue line, LLM predictions, and some context, and allows the user to input the correct speaker.
+Interactive CLI for annotating dialogue speakers in the parsed JSON.
 
-Usage:
-    python annotation_tool.py alice
-    python annotation_tool.py alice --chapter 0
-    python annotation_tool.py alice --reset
+Shows each dialogue line with surrounding context and the LLM-context prediction.
+Press Enter to accept the prediction, type a name to override, or 's' to skip.
+Annotations are saved to 'speaker_ground_truth' and used by evaluate_attribution.py.
+
+Usage (run from project root):
+    python experiments/annotation_tool.py alice
+    python experiments/annotation_tool.py alice --chapter 0
+    python experiments/annotation_tool.py alice --reset
 """
 
 import argparse
@@ -35,21 +39,17 @@ def print_context(paragraphs: list[dict], current_idx: int, window: int = 3) -> 
         print(f"\033[90m{prefix} {p['text'][:120]}\033[0m")
 
 
-def print_dialogue(p: dict, idx: int, total: int, done: int) -> None:
+def print_dialogue(p: dict, idx: int, done: int) -> None:
     print()
-    print(f"\033[1m[{idx}]  ({done} готово)\033[0m")
+    print(f"\033[1m[{idx}]  ({done} done)\033[0m")
     print(f"\033[97m  \"{p['text']}\"\033[0m")
     print()
-    booknlp = p.get("speaker") or "—"
-    llm_z   = p.get("speaker_llm_zeroshot") or "—"
-    llm_c   = p.get("speaker_llm_context") or "—"
-    gt      = p.get("speaker_ground_truth")
+    llm_c = p.get("speaker_llm_context") or "—"
+    gt    = p.get("speaker_ground_truth")
 
-    print(f"  BookNLP    : \033[33m{booknlp}\033[0m")
-    print(f"  LLM zero   : \033[36m{llm_z}\033[0m")
     print(f"  LLM context: \033[32m{llm_c}\033[0m")
     if gt:
-        print(f"  Ground truth is entered: \033[35m{gt}\033[0m")
+        print(f"  Ground truth already set: \033[35m{gt}\033[0m")
 
 
 def get_input(llm_context: str | None) -> str | None:
@@ -136,7 +136,7 @@ def annotate(
         for i, para_idx in enumerate(pending):
             p = paragraphs[para_idx]
             print_context(paragraphs, para_idx)
-            print_dialogue(p, para_idx, len(dialogue_indices), len(already_done) + i)
+            print_dialogue(p, para_idx, len(already_done) + i)
 
             result = get_input(p.get("speaker_llm_context"))
 
