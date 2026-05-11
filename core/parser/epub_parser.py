@@ -1,13 +1,17 @@
+"""
+EPUB parser: extracts chapters and paragraphs from an EPUB file.
+
+Entry points:
+  parse_epub_to_db  — parse EPUB and write chapters + paragraphs to DB
+  extract_cover     — extract cover image from EPUB to disk
+"""
+
 import re
-import json
 import os
-import sys
 import ebooklib
 from ebooklib import epub
 from bs4 import BeautifulSoup
-from typing import List
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 from core.models import Book, Chapter, Paragraph
 
 
@@ -20,6 +24,7 @@ SKIP_CONTENT   = ["Project Gutenberg", "END OF THE PROJECT",
 
 
 def should_skip(filename: str, raw: str) -> bool:
+    """Return True if the EPUB document should be skipped (TOC, cover, Gutenberg license, etc.)."""
     if any(kw in filename.lower() for kw in SKIP_FILENAMES):
         return True
     if any(kw in raw[:300] for kw in SKIP_CONTENT):
@@ -28,6 +33,7 @@ def should_skip(filename: str, raw: str) -> bool:
 
 
 def clean_text(text: str) -> str:
+    """Normalize whitespace, strip footnote markers, and replace curly quotes with straight ones."""
     text = re.sub(r'\s+', ' ', text)
     text = re.sub(r'\[\d+\]', '', text)
     text = text.replace('\u201c', '"').replace('\u201d', '"')
@@ -36,6 +42,7 @@ def clean_text(text: str) -> str:
 
 
 def get_chapter_title(element) -> str:
+    """Extract chapter title from an h1 element, appending sidenote subtitle if present."""
     text = element.get_text(strip=True)
     sidenote = element.find_next_sibling("div", class_="sidenote")
     if sidenote:
@@ -45,7 +52,7 @@ def get_chapter_title(element) -> str:
 
 
 def extract_h2_chapter_title(element) -> str:
-
+    """Extract the most relevant line from an h2/h3 heading, preferring lines with 'chapter'."""
     raw = element.get_text(separator="\n", strip=True)
     lines = [l.strip() for l in raw.splitlines() if l.strip()]
     for line in reversed(lines):
@@ -55,6 +62,7 @@ def extract_h2_chapter_title(element) -> str:
 
 
 def is_chapter_heading(element) -> bool:
+    """Return True if the element marks the start of a new chapter."""
     if element.name == "div" and "chapter" in element.get("class", []):
         return True
     if element.name == "h1":
@@ -77,7 +85,12 @@ def _iter_body_elements(body):
             yield el
 
 
-def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
+def extract_from_document(html_content: bytes, start_id: int) -> list[Chapter]:
+    """Parse a single EPUB HTML document and return a list of Chapter objects.
+
+    Handles two structural patterns: <div class="chapter"> blocks and heading-delimited chapters.
+    Skips figures, footnotes, sidenotes, and drop-cap decorations.
+    """
     soup = BeautifulSoup(html_content, "html.parser")
 
     for img in soup.find_all("img"):
@@ -92,7 +105,7 @@ def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
     for tag in soup.find_all("span", class_="x-ebookmaker-pageno"):
         tag.decompose()
 
-    chapters: List[Chapter] = []
+    chapters: list[Chapter] = []
     current: Chapter = None
     chapter_id = start_id
     drop_cap_prefix = ""
@@ -203,6 +216,7 @@ def extract_from_document(html_content: bytes, start_id: int) -> List[Chapter]:
 
 
 def parse_epub(file_path: str) -> Book:
+    """Parse an EPUB file and return a Book object with all chapters and paragraphs."""
     epub_book = epub.read_epub(file_path)
 
     title   = epub_book.title or "Unknown"
@@ -230,64 +244,6 @@ def parse_epub(file_path: str) -> Book:
 
     return book
 
-
-
-def save_to_json(book: Book, path: str) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    data = {
-        "title":          book.title,
-        "author":         book.author,
-        "language":       book.language,
-        "total_chapters": len(book.chapters),
-        "chapters": [
-            {
-                "id":               ch.id,
-                "title":            ch.title,
-                "type":             ch.chapter_type,
-                "total_paragraphs": len(ch.paragraphs),
-                "paragraphs": [
-                    {
-                        "text":       p.text,
-                        "type":       p.type,        # narration / dialogue
-                        "chapter_id": p.chapter_id,
-                        "speaker":    p.speaker,
-                        "scene":      p.scene,
-                    }
-                    for p in ch.paragraphs
-                ]
-            }
-            for ch in book.chapters
-        ]
-    }
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-    print(f"Сохранено: {path}  ({len(book.chapters)} глав)")
-
-
-def load_from_json(path: str) -> Book:
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    book = Book(
-        title=data["title"],
-        author=data["author"],
-        language=data["language"]
-    )
-    for ch_data in data["chapters"]:
-        ch = Chapter(
-            id=ch_data["id"],
-            title=ch_data["title"],
-            chapter_type=ch_data["type"]
-        )
-        for p in ch_data["paragraphs"]:
-            ch.paragraphs.append(Paragraph(
-                text=p["text"],
-                type=p["type"],
-                chapter_id=p["chapter_id"],
-                speaker=p.get("speaker"),
-                scene=p.get("scene")
-            ))
-        book.chapters.append(ch)
-    return book
 
 
 def extract_cover(epub_path: str, dest_dir: str) -> str | None:
@@ -370,7 +326,7 @@ def parse_epub_to_db(epub_path: str, book_id: int, db) -> int:
                 chapter_id=db_chapter.id,
                 index=i,
                 text=p.text,
-                type="narration",   # default; quote_splitter will update
+                type="narration",
                 speaker=None,
             ))
             total_paragraphs += 1

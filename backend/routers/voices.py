@@ -1,3 +1,5 @@
+"""Voices router: manage character voice assignments and preview TTS voices."""
+
 import json
 from pathlib import Path
 
@@ -14,6 +16,7 @@ STORAGE_DIR = Path("storage/uploads")
 
 
 def get_book_or_404(slug: str, db: Session) -> Book:
+    """Return the Book for the given slug or raise HTTP 404."""
     book = db.query(Book).filter(Book.slug == slug).first()
     if not book:
         raise HTTPException(status_code=404, detail=f"Book '{slug}' not found")
@@ -26,7 +29,10 @@ def get_book_or_404(slug: str, db: Session) -> Book:
 def get_characters(book: str, db: Session = Depends(get_db)):
     """Get all characters for a book from DB."""
     db_book = get_book_or_404(book, db)
-    characters = db.query(Character).filter(Character.book_id == db_book.id).all()
+    characters = (db.query(Character)
+                    .filter(Character.book_id == db_book.id)
+                    .order_by(Character.name)
+                    .all())
 
     return {
         "characters": [
@@ -141,14 +147,11 @@ def update_character_voice(
 # ── GET /books/{book}/voices ──────────────────────────────────────────────────
 
 @router.get("/{book}/voices")
-def list_voices(book: str, engine: str = "elevenlabs", lang: str = "en-US"):
+def list_voices(book: str, engine: str = "elevenlabs"):
     """List available TTS voices for an engine."""
     if engine == "elevenlabs":
         from core.tts.elevenlabs_tts import ElevenLabsTTS
         return {"engine": engine, "voices": ElevenLabsTTS().list_voices()}
-    elif engine == "azure":
-        from core.tts.azure_tts import AzureTTS
-        return {"engine": engine, "voices": AzureTTS().list_voices(lang)}
     elif engine == "xtts":
         from core.tts.xtts_tts import XttsTTS
         return {"engine": engine, "voices": XttsTTS().list_voices()}
@@ -174,9 +177,6 @@ def preview_voice(book: str, body: PreviewRequest, db: Session = Depends(get_db)
     if body.engine == "elevenlabs":
         from core.tts.elevenlabs_tts import ElevenLabsTTS
         tts = ElevenLabsTTS()
-    elif body.engine == "azure":
-        from core.tts.azure_tts import AzureTTS
-        tts = AzureTTS()
     elif body.engine == "xtts":
         from core.tts.xtts_tts import XttsTTS
         tts = XttsTTS()
@@ -193,17 +193,22 @@ def preview_voice(book: str, body: PreviewRequest, db: Session = Depends(get_db)
         ).first()
         if char and char.voice_stability is not None:
             from elevenlabs.types import VoiceSettings
+            stability:  float = char.voice_stability          # type: ignore[assignment]
+            style:      float = char.voice_style or 0.0       # type: ignore[assignment]
+            sim_boost:  float = char.voice_similarity_boost or 0.75  # type: ignore[assignment]
+            spk_boost:  bool  = (char.voice_speaker_boost     # type: ignore[assignment]
+                                 if char.voice_speaker_boost is not None else True)
             voice_settings = VoiceSettings(
-                stability        = char.voice_stability,
-                style            = char.voice_style            or 0.0,
-                similarity_boost = char.voice_similarity_boost or 0.75,
-                use_speaker_boost= char.voice_speaker_boost    if char.voice_speaker_boost is not None else True,
+                stability=stability,
+                style=style,
+                similarity_boost=sim_boost,
+                use_speaker_boost=spk_boost,
             )
 
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp:
         tmp_path = tmp.name
 
-    tts.synthesize(body.text[:300], body.voice_id, output_path=tmp_path,
+    tts.synthesize(body.text[:300], body.voice_id, output_path=Path(tmp_path),
                    voice_settings=voice_settings)
 
     with open(tmp_path, "rb") as f:
@@ -212,29 +217,3 @@ def preview_voice(book: str, body: PreviewRequest, db: Session = Depends(get_db)
     os.unlink(tmp_path)
 
     return Response(content=audio_bytes, media_type="audio/mpeg")
-
-
-# ── POST /books/{book}/assign-voices ─────────────────────────────────────────
-
-@router.post("/{book}/assign-voices")
-def assign_voices(book: str, engine: str = "elevenlabs", db: Session = Depends(get_db)):
-    """Run LLM voice assignment and save results to DB."""
-    db_book = get_book_or_404(book, db)
-
-    from core.nlp.voice_assigner import run as voice_run
-    voice_run(book)
-
-    # Read the generated voice_map and update DB characters
-    voice_map_path = STORAGE_DIR / book / f"voice_map_{engine}.json"
-    if voice_map_path.exists():
-        with open(voice_map_path, encoding="utf-8") as f:
-            voice_map = json.load(f)
-
-        characters = db.query(Character).filter(Character.book_id == db_book.id).all()
-        for char in characters:
-            if char.name in voice_map:
-                char.voice_id = voice_map[char.name]
-                char.engine   = engine
-        db.commit()
-
-    return {"ok": True, "assigned": len(voice_map) if voice_map_path.exists() else 0}

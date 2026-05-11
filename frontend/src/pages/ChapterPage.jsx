@@ -7,7 +7,7 @@ import {
   SoundOutlined, UserOutlined, CloudOutlined,
   BulbOutlined, BulbFilled,
 } from "@ant-design/icons";
-import { getChapterReader, getBook, getAudioUrl, getAmbientConfig, generateAmbient } from "../api/client";
+import { getChapterReader, getBook, getAudioUrl, getAmbientConfig, BASE_URL } from "../api/client";
 
 const { Title, Text } = Typography;
 
@@ -157,7 +157,7 @@ export default function ChapterPage() {
     const scene = ambientScenes[sceneIdx];
     if (!scene?.sound_url) return;
 
-    const a = new Audio(`http://localhost:8000${scene.sound_url}`);
+    const a = new Audio(`${BASE_URL}${scene.sound_url}`);
     a.volume = ambientVolume;
     a.loop   = true;
     a.play().catch(() => {});
@@ -274,7 +274,7 @@ export default function ChapterPage() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100vh", overflow: "hidden",
-                  background: darkMode ? "#0f0f0f" : "#fafaf8",
+                  background: darkMode ? "#0f0f0f" : "#fff",
                   transition: "background 0.3s" }}>
 
       {/* ── Top bar ── */}
@@ -310,55 +310,20 @@ export default function ChapterPage() {
           </Button>
         </Tooltip>
 
-        {/* Ambient button */}
-        {hasAudio && (() => {
-          const hasSound = ambientScenes.some(s => s.sound_url);
-          if (ambientStatus === "running") return (
-            <Button size="small" loading disabled>Generating...</Button>
-          );
-          if (ambientStatus === "done" && hasSound) return (
-            <Tooltip title={ambientEnabled ? "Disable ambient sounds" : "Enable ambient sounds"}>
-              <Button
-                size="small"
-                icon={<CloudOutlined />}
-                type={ambientEnabled ? "primary" : "default"}
-                style={ambientEnabled ? { background: "#059669", borderColor: "#059669" } : {}}
-                onClick={() => setAmbientEnabled(v => !v)}
-              >
-                Ambient
-              </Button>
-            </Tooltip>
-          );
-          return (
-            <Tooltip title="Generate ambient background sounds for each scene">
-              <Button
-                size="small"
-                icon={<CloudOutlined />}
-                onClick={async () => {
-                  const chData = bookData?.chapters?.find(c => String(c.id) === String(chapterId));
-                  const engine = chData?.synth_engine || "elevenlabs";
-                  setAmbientStatus("running");
-                  try {
-                    await generateAmbient(book, chapterId, engine);
-                    const poll = setInterval(async () => {
-                      const r = await getAmbientConfig(book, chapterId, engine);
-                      if (r.data.status === "done") {
-                        clearInterval(poll);
-                        setAmbientStatus("done");
-                        setAmbientScenes(r.data.scenes ?? []);
-                      } else if (r.data.status === "error") {
-                        clearInterval(poll);
-                        setAmbientStatus("error");
-                      }
-                    }, 3000);
-                  } catch { setAmbientStatus("error"); }
-                }}
-              >
-                Add ambient
-              </Button>
-            </Tooltip>
-          );
-        })()}
+        {/* Ambient toggle — only shown when ambient is available */}
+        {hasAudio && ambientStatus === "done" && ambientScenes.some(s => s.sound_url) && (
+          <Tooltip title={ambientEnabled ? "Disable ambient sounds" : "Enable ambient sounds"}>
+            <Button
+              size="small"
+              icon={<CloudOutlined />}
+              type={ambientEnabled ? "primary" : "default"}
+              style={ambientEnabled ? { background: "#059669", borderColor: "#059669" } : {}}
+              onClick={() => setAmbientEnabled(v => !v)}
+            >
+              Ambient
+            </Button>
+          </Tooltip>
+        )}
         <Button
           icon={<LeftOutlined />}
           size="small"

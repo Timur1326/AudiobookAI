@@ -1,25 +1,42 @@
 """
-XTTS v2 TTS engine (Coqui TTS, local).
+XTTS v2 TTS backend (Coqui TTS, runs locally).
 
-voice_id = path to a reference WAV file (3–30 sec) for voice cloning.
-
-Usage:
-    tts = XttsTTS()
-    tts.synthesize("Hello world", voice_id="storage/voices/alice.wav", output_path=Path("out.wav"))
+voice_id is a path to a reference audio file (3-30 sec) used for voice cloning.
+The model is loaded lazily on the first synthesize call and reused for all subsequent calls.
 """
 
+import re
 from pathlib import Path
 
 from core.tts.base_tts import BaseTTS
 
 DEFAULT_LANGUAGE = "en"
+XTTS_CHAR_LIMIT  = 230
+
+
+def _split_text(text: str, limit: int = XTTS_CHAR_LIMIT) -> list[str]:
+    """Split text into chunks under the XTTS character limit, breaking at sentences."""
+    if len(text) <= limit:
+        return [text]
+    chunks, current = [], ""
+    for sentence in re.split(r"(?<=[.!?])\s+", text):
+        if len(current) + len(sentence) + 1 <= limit:
+            current = (current + " " + sentence).strip()
+        else:
+            if current:
+                chunks.append(current)
+            current = sentence
+    if current:
+        chunks.append(current)
+    return chunks or [text]
 
 
 class XttsTTS(BaseTTS):
+    """TTS backend that synthesizes audio locally using the XTTS v2 model."""
 
     def __init__(self, language: str = DEFAULT_LANGUAGE):
         self.language = language
-        self._model = None  # lazy load
+        self._model = None  # loaded on first synthesize call
 
     def _load_model(self):
         if self._model is not None:
@@ -34,6 +51,7 @@ class XttsTTS(BaseTTS):
         text: str,
         voice_id: str,
         output_path: Path,
+        **kwargs,
     ) -> Path:
         """
         voice_id: path to reference WAV file for voice cloning.
@@ -48,20 +66,43 @@ class XttsTTS(BaseTTS):
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # XTTS outputs WAV — convert to mp3 if needed
-        wav_path = output_path.with_suffix(".wav")
+        chunks = _split_text(text)
 
-        self._model.tts_to_file(
-            text=text,
-            speaker_wav=str(reference),
-            language=self.language,
-            file_path=str(wav_path),
-        )
+        if len(chunks) == 1:
+            wav_path = output_path.with_suffix(".wav")
+            self._model.tts_to_file(
+                text=chunks[0],
+                speaker_wav=str(reference),
+                language=self.language,
+                file_path=str(wav_path),
+            )
+            segments = [wav_path]
+        else:
+            segments = []
+            for i, chunk in enumerate(chunks):
+                chunk_wav = output_path.with_suffix(f".chunk{i}.wav")
+                self._model.tts_to_file(
+                    text=chunk,
+                    speaker_wav=str(reference),
+                    language=self.language,
+                    file_path=str(chunk_wav),
+                )
+                segments.append(chunk_wav)
+
+            # Merge all chunks into one wav
+            from pydub import AudioSegment as _AS
+            merged = sum((_AS.from_wav(str(s)) for s in segments), _AS.empty())
+            wav_path = output_path.with_suffix(".wav")
+            merged.export(str(wav_path), format="wav")
+            for s in segments:
+                s.unlink(missing_ok=True)
 
         if output_path.suffix == ".mp3":
             from pydub import AudioSegment
             AudioSegment.from_wav(str(wav_path)).export(str(output_path), format="mp3")
             wav_path.unlink()
+        else:
+            wav_path.rename(output_path)
 
         return output_path
 

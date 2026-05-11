@@ -10,7 +10,7 @@ import {
   TeamOutlined, ThunderboltOutlined,
   DownloadOutlined,
 } from "@ant-design/icons";
-import { getBook } from "../api/client";
+import { getBook, getAudioUrl } from "../api/client";
 import GenerateModal from "../components/GenerateModal";
 
 const { Title, Text } = Typography;
@@ -121,7 +121,6 @@ export default function BookPage() {
         });
       }, 2500);
     }
-    return () => {};
   }, [data]);
 
   useEffect(() => { load(); }, [book]);
@@ -140,8 +139,6 @@ export default function BookPage() {
     </div>
   );
 
-  const doneSteps   = data.steps?.filter(s => s.status === "done").length  ?? 0;
-  const totalSteps  = data.steps?.length ?? 7;
   const createdDate = data.created_at
     ? new Date(data.created_at).toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" })
     : "";
@@ -230,7 +227,7 @@ export default function BookPage() {
                         onClick={e => {
                           e.stopPropagation();
                           const a = document.createElement("a");
-                          a.href = `http://localhost:8000/books/${book}/audio/${ch.id}?engine=${ch.synth_engine || "elevenlabs"}`;
+                          a.href = getAudioUrl(book, ch.id, ch.synth_engine || "elevenlabs");
                           a.download = `${ch.title}.mp3`;
                           a.click();
                         }}

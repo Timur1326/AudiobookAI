@@ -21,14 +21,17 @@ bearer      = HTTPBearer(auto_error=False)
 
 
 def hash_password(password: str) -> str:
+    """Return a bcrypt hash of the given password."""
     return pwd_context.hash(password)
 
 
 def verify_password(plain: str, hashed: str) -> bool:
+    """Return True if plain matches the bcrypt hash."""
     return pwd_context.verify(plain, hashed)
 
 
 def create_token(user_id: int) -> str:
+    """Create a signed JWT for the given user, valid for TOKEN_TTL minutes."""
     expire = datetime.utcnow() + timedelta(minutes=TOKEN_TTL)
     return jwt.encode({"sub": str(user_id), "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
 

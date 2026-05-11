@@ -1,15 +1,26 @@
-import json
+"""
+Pipeline router: triggers and monitors the 7-step audiobook processing pipeline.
+
+Steps:
+  1. Parse EPUB          — epub_parser
+  2. Split quotes        — quote_splitter
+  3. Detect scenes       — scene_splitter
+  4. Extract characters  — character_extractor
+  5. Attribute dialogue  — llm_attributor
+  6. Assign voices       — voice_assigner
+  7. Synthesize          — synthesize_chapter (separate endpoint)
+"""
+
 import threading
 from datetime import datetime
 from pathlib import Path
-from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.database import SessionLocal, get_db
-from backend.models import Book, Chapter, Character, PipelineStep, StepStatus
+from backend.models import AmbientScene, Book, Chapter, Paragraph, ParagraphTimestamp, PipelineStep, Scene, StepStatus
 
 router = APIRouter()
 
@@ -17,6 +28,7 @@ STORAGE_DIR = Path("storage/uploads")
 
 
 def get_book_or_404(slug: str, db: Session) -> Book:
+    """Return the Book for the given slug or raise HTTP 404."""
     book = db.query(Book).filter(Book.slug == slug).first()
     if not book:
         raise HTTPException(status_code=404, detail=f"Book '{slug}' not found")
@@ -40,10 +52,8 @@ def set_step_status(book_id: int, step: int, status: StepStatus, error: str = No
         db.close()
 
 
-def run_pipeline_steps(book_slug: str, book_id: int, steps: List[int], engine: str):
+def run_pipeline_steps(book_slug: str, book_id: int, steps: list[int], engine: str):
     """Run pipeline steps sequentially in a background thread."""
-
-    base = STORAGE_DIR / book_slug
 
     def run_step(step_num: int):
         # Skip checks using DB state instead of JSON files
@@ -72,7 +82,14 @@ def run_pipeline_steps(book_slug: str, book_id: int, steps: List[int], engine: s
                     return
 
             elif step_num == 4:
-                # Step 4 = Attribute dialogue (runs first, without character list)
+                # Step 4 = Extract characters from raw text (before attribution)
+                from backend.models import Character as DBCharacter
+                if check_db.query(DBCharacter).filter(DBCharacter.book_id == book_id).count() > 0:
+                    set_step_status(book_id, step_num, StepStatus.done)
+                    return
+
+            elif step_num == 5:
+                # Step 5 = Attribute dialogue with known character list
                 from backend.models import Paragraph as DBParagraph, Chapter as DBChapter
                 total_d = (check_db.query(DBParagraph)
                            .join(DBChapter)
@@ -86,13 +103,6 @@ def run_pipeline_steps(book_slug: str, book_id: int, steps: List[int], engine: s
                                       DBParagraph.speaker.isnot(None))
                               .count())
                 if total_d > 0 and attributed / total_d >= 0.8:
-                    set_step_status(book_id, step_num, StepStatus.done)
-                    return
-
-            elif step_num == 5:
-                # Step 5 = Extract characters (runs after attribution)
-                from backend.models import Character as DBCharacter
-                if check_db.query(DBCharacter).filter(DBCharacter.book_id == book_id).count() > 0:
                     set_step_status(book_id, step_num, StepStatus.done)
                     return
 
@@ -120,18 +130,24 @@ def run_pipeline_steps(book_slug: str, book_id: int, steps: List[int], engine: s
                 scene_run_on_db(book_id=book_id, db=db)
 
             elif step_num == 4:
-                # Attribution first — LLM attributes from context without character list
-                from core.nlp.llm_attributor_with_context import run_on_db as attr_run_on_db
-                attr_run_on_db(book_id=book_id, db=db)
-
-            elif step_num == 5:
-                # Extraction after attribution — uses clean LLM-attributed speakers
+                # Extract characters from raw text first
                 from core.nlp.character_extractor import run_on_db as char_run_on_db
                 char_run_on_db(book_id=book_id, db=db)
+
+            elif step_num == 5:
+                # Attribution with known character list from step 4
+                from core.nlp.llm_attributor import run_on_db as attr_run_on_db
+                attr_run_on_db(book_id=book_id, db=db)
 
             elif step_num == 6:
                 from core.nlp.voice_assigner import run_on_db as voice_run_on_db
                 voice_run_on_db(book_id=book_id, db=db, engine=engine)
+                # Auto-download ElevenLabs voice previews for XTTS cloning
+                try:
+                    from core.tts.download_voices import download_voices
+                    download_voices(book_slug)
+                except Exception as e:
+                    print(f"Warning: voice download failed: {e}")
 
             set_step_status(book_id, step_num, StepStatus.done)
 
@@ -145,67 +161,10 @@ def run_pipeline_steps(book_slug: str, book_id: int, steps: List[int], engine: s
         run_step(step)
 
 
-def _import_characters(book_slug: str, book_id: int):
-    """Import characters.json into DB after step 5."""
-    path = STORAGE_DIR / book_slug / "characters.json"
-    if not path.exists():
-        return
-
-    with open(path, encoding="utf-8") as f:
-        raw = json.load(f)
-    chars_data = raw if isinstance(raw, list) else raw.get("characters", [])
-
-    db = SessionLocal()
-    try:
-        db.query(Character).filter(Character.book_id == book_id).delete()
-        for c in chars_data:
-            name = c.get("name") or c.get("character")
-            if not name:
-                continue
-            sample = c.get("sample_text") or c.get("sample")
-            if not sample and c.get("dialogues"):
-                sample = c["dialogues"][0]
-            db.add(Character(
-                book_id=book_id,
-                name=name,
-                aliases=json.dumps(c.get("aliases", []), ensure_ascii=False),
-                gender=c.get("gender"),
-                age=c.get("age"),
-                personality=c.get("personality"),
-                accent=c.get("accent"),
-                voice_desc=c.get("voice_description") or c.get("voice_desc"),
-                sample_text=sample,
-            ))
-        db.commit()
-    finally:
-        db.close()
-
-
-def _sync_voice_map(book_slug: str, book_id: int, engine: str):
-    """Sync voice_map_*.json into DB characters after step 6."""
-    path = STORAGE_DIR / book_slug / f"voice_map_{engine}.json"
-    if not path.exists():
-        return
-
-    with open(path, encoding="utf-8") as f:
-        voice_map = json.load(f)
-
-    db = SessionLocal()
-    try:
-        chars = db.query(Character).filter(Character.book_id == book_id).all()
-        for char in chars:
-            if char.name in voice_map:
-                char.voice_id = voice_map[char.name]
-                char.engine   = engine
-        db.commit()
-    finally:
-        db.close()
-
-
 # ── POST /books/{book}/pipeline/run ───────────────────────────────────────────
 
 class PipelineRunRequest(BaseModel):
-    steps:  List[int] = [2, 3, 4, 5, 6]
+    steps:  list[int] = [2, 3, 4, 5, 6]
     engine: str       = "elevenlabs"
 
 
@@ -264,9 +223,9 @@ def reset_pipeline(book: str, db: Session = Depends(get_db)):
 # ── POST /books/{book}/synthesize-batch ───────────────────────────────────────
 
 class SynthesizeBatchRequest(BaseModel):
-    chapter_ids:     List[int]
+    chapter_ids:     list[int]
     engine:          str = "elevenlabs"
-    narrator_style:  str = "standard"
+    narrator_style:  str = "theatrical"
 
 
 @router.post("/{book}/synthesize-batch")
@@ -307,9 +266,31 @@ def synthesize_batch(book: str, body: SynthesizeBatchRequest, db: Session = Depe
     return {"ok": True, "queued": body.chapter_ids}
 
 
-def _synthesize_chapters_bg(book_slug: str, book_id: int, chapter_ids: List[int], engine: str, narrator_style: str = "standard"):
+def _fill_ambient_timestamps(db, chapter_db_id: int, engine: str):
+    """After synthesis, fill NULL start/end in pre-assigned ambient scenes."""
+    scenes = db.query(Scene).filter(Scene.chapter_id == chapter_db_id).all()
+    for scene in scenes:
+        ambient = db.query(AmbientScene).filter(
+            AmbientScene.scene_id == scene.id,
+            AmbientScene.engine   == engine,
+            AmbientScene.start.is_(None),
+        ).first()
+        if not ambient:
+            continue
+        para_ids = [p.id for p in db.query(Paragraph).filter(Paragraph.scene_id == scene.id).all()]
+        ts_rows  = db.query(ParagraphTimestamp).filter(
+            ParagraphTimestamp.paragraph_id.in_(para_ids),
+            ParagraphTimestamp.engine == engine,
+        ).all() if para_ids else []
+        if ts_rows:
+            ambient.start = min(t.start for t in ts_rows)
+            ambient.end   = max(t.end   for t in ts_rows)
+    db.commit()
+
+
+def _synthesize_chapters_bg(book_slug: str, book_id: int, chapter_ids: list[int], engine: str, narrator_style: str = "theatrical"):
     """Synthesize chapters sequentially in background thread."""
-    import synthesize_chapter as sc
+    import core.tts.synthesize_chapter as sc
 
     for ch_id in chapter_ids:
         db = SessionLocal()
@@ -340,6 +321,10 @@ def _synthesize_chapters_bg(book_slug: str, book_id: int, chapter_ids: List[int]
             db_ch.synth_status = StepStatus.done if result else StepStatus.error
             db_ch.audio_path   = str(result) if result else None
             db.commit()
+
+            # Fill ambient timestamps now that synthesis is done
+            if result:
+                _fill_ambient_timestamps(db, db_ch.id, engine)
 
         except Exception as e:
             try:

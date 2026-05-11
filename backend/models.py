@@ -18,8 +18,8 @@ STEP_NAMES = {
     1: "Parse",
     2: "Split quotes",
     3: "Detect scenes",
-    4: "Attribute dialogue",
-    5: "Extract characters",
+    4: "Extract characters",
+    5: "Attribute dialogue",
     6: "Assign voices",
     7: "Synthesis",
 }
@@ -76,7 +76,7 @@ class Chapter(Base):
     id:            Mapped[int]        = mapped_column(Integer, primary_key=True)
     book_id:       Mapped[int]        = mapped_column(ForeignKey("books.id"))
     chapter_index: Mapped[int]        = mapped_column(Integer)
-    chapter_id:    Mapped[int]        = mapped_column(Integer)  # id from parsed JSON
+    chapter_id:    Mapped[int]        = mapped_column(Integer)
     title:         Mapped[str]        = mapped_column(String)
     audio_path:    Mapped[str | None] = mapped_column(String, nullable=True)
     synth_status:  Mapped[StepStatus] = mapped_column(Enum(StepStatus), default=StepStatus.pending)
@@ -94,6 +94,7 @@ class Scene(Base):
     chapter_id:  Mapped[int]        = mapped_column(ForeignKey("chapters.id"), index=True)
     scene_index: Mapped[int]        = mapped_column(Integer)
     preview:     Mapped[str | None] = mapped_column(Text, nullable=True)
+    location:    Mapped[str | None] = mapped_column(String, nullable=True)
 
     chapter:        Mapped["Chapter"]             = relationship(back_populates="scenes")
     paragraphs:     Mapped[list["Paragraph"]]    = relationship(back_populates="scene")
@@ -121,7 +122,7 @@ class ParagraphTimestamp(Base):
 
     id:           Mapped[int]   = mapped_column(Integer, primary_key=True)
     paragraph_id: Mapped[int]   = mapped_column(ForeignKey("paragraphs.id"), index=True)
-    engine:       Mapped[str]   = mapped_column(String)   # "elevenlabs" | "azure" | "xtts"
+    engine:       Mapped[str]   = mapped_column(String)   # "elevenlabs" | "xtts"
     start:        Mapped[float] = mapped_column(Float)
     end:          Mapped[float] = mapped_column(Float)
 

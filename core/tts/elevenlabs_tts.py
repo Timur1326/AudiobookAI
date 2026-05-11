@@ -1,5 +1,6 @@
+"""ElevenLabs TTS backend: converts text to MP3 using the ElevenLabs API."""
+
 import os
-import time
 from pathlib import Path
 
 from elevenlabs import ElevenLabs
@@ -7,21 +8,22 @@ from elevenlabs.types import VoiceSettings
 
 from core.tts.base_tts import BaseTTS
 
-
+# elevenlabs voice ID for the default narrator voice
 DEFAULT_NARRATOR_VOICE = "SAz9YHcvj6GT2YYXdXww"
 
+# elevalbs TTS model
 DEFAULT_MODEL = "eleven_turbo_v2_5"
 
 
 class ElevenLabsTTS(BaseTTS):
+    """TTS backend that synthesizes audio via the ElevenLabs cloud API."""
 
     def __init__(self, api_key: str | None = None, model: str = DEFAULT_MODEL):
         key = api_key or os.environ.get("ELEVENLABS_API_KEY")
         if not key:
-            raise ValueError("ELEVENLABS_API_KEY не задан")
+            raise ValueError("ELEVENLABS_API_KEY is not in .env")
         self.client = ElevenLabs(api_key=key)
         self.model = model
-
 
     def synthesize(
         self,
@@ -30,6 +32,10 @@ class ElevenLabsTTS(BaseTTS):
         output_path: Path = None,
         voice_settings: VoiceSettings | None = None,
     ) -> Path:
+        """Synthesize text to MP3 and write it to output_path.
+
+        Uses default neutral VoiceSettings if none are provided.
+        """
         if output_path is None:
             raise ValueError("output_path is required")
 
@@ -54,6 +60,7 @@ class ElevenLabsTTS(BaseTTS):
         return output_path
 
     def list_voices(self) -> list[dict]:
+        """Return all available voices from the ElevenLabs account."""
         response = self.client.voices.get_all()
         return [
             {"id": v.voice_id, "name": v.name, "category": v.category}

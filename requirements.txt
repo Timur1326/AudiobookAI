@@ -1,28 +1,35 @@
-sqlalchemy
-alembic
-psycopg2-binary
-ebooklib
-PyMuPDF
-beautifulsoup4
-chardet
-booknlp
-spacy
-elevenlabs
-TTS
-pydub
-ffmpeg-python
+# Web framework
 fastapi
+uvicorn[standard]
+python-multipart
+
+# Database
+sqlalchemy
+
+# Auth
 python-jose[cryptography]
 passlib[bcrypt]
 bcrypt==4.0.1
-python-multipart
 email-validator
-celery
-redis
-streamlit
-openai-whisper
-jiwer
-speechmos
-pandas
-matplotlib
 
+# EPUB parsing
+ebooklib
+beautifulsoup4
+
+# NLP
+spacy
+
+# TTS engines
+elevenlabs
+TTS
+
+# Audio processing
+pydub
+ffmpeg-python
+
+# AI / LLM
+anthropic
+
+# HTTP clients
+httpx
+requests

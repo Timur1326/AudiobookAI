@@ -1,9 +1,7 @@
 """
 Downloads voice preview samples from ElevenLabs for all voices in voice_map_elevenlabs.json.
-Saves them as WAV files to storage/voices/ for use as XTTS reference audio.
-
-Usage:
-    python download_voices.py alice
+Saves them as MP3 files to storage/voices/ for use as XTTS reference audio,
+and writes voice_map_xtts.json mapping character names to local file paths.
 """
 
 import json
@@ -20,6 +18,12 @@ VOICES_DIR = Path("storage/voices")
 
 
 def download_voices(book: str) -> None:
+    """Download ElevenLabs voice previews for a book and build voice_map_xtts.json.
+
+    Reads voice_map_elevenlabs.json to get the assigned voice IDs, fetches the
+    preview MP3 for each unique voice from ElevenLabs, saves them to storage/voices/,
+    then writes voice_map_xtts.json with {character: local_mp3_path} mappings.
+    """
     api_key = os.environ.get("ELEVENLABS_API_KEY")
     if not api_key:
         raise ValueError("ELEVENLABS_API_KEY not set in .env")

@@ -1,3 +1,6 @@
+"""Synthesis router: trigger TTS synthesis and serve audio files and timestamps."""
+
+import json
 from datetime import datetime
 from pathlib import Path
 
@@ -17,7 +20,6 @@ STORAGE_DIR = Path("storage/uploads")
 class SynthesizeRequest(BaseModel):
     chapter_id: int
     engine: str = "elevenlabs"
-    use_voice_map: bool = True
 
 
 # ── POST /books/{book}/synthesize ─────────────────────────────────────────────
@@ -42,7 +44,7 @@ def synthesize(book: str, body: SynthesizeRequest, db: Session = Depends(get_db)
     db.commit()
 
     try:
-        import synthesize_chapter as sc
+        import core.tts.synthesize_chapter as sc
 
         result = sc.synthesize_chapter_from_db(
             book_slug=book,
@@ -93,7 +95,7 @@ def get_timestamps(book: str, chapter_id: int, engine: str = "elevenlabs"):
 
     if not ts_path.exists():
         # Try to rebuild from existing segment files
-        import synthesize_chapter as sc
+        import core.tts.synthesize_chapter as sc
         result = sc.build_timestamps_from_segments(book, chapter_id, engine)
         if not result:
             raise HTTPException(status_code=404, detail="Timestamps not available — synthesize chapter first")

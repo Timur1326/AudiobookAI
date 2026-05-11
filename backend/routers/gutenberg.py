@@ -29,6 +29,7 @@ _NS = {
 
 
 def _text(el, tag: str) -> str:
+    """Return stripped text content of a child XML element, or empty string if absent."""
     child = el.find(tag, _NS)
     return child.text.strip() if child is not None and child.text else ""
 

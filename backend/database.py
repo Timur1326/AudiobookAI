@@ -1,3 +1,9 @@
+"""
+SQLAlchemy database setup: engine, session factory, and declarative base.
+
+Defaults to SQLite for local development; set DATABASE_URL in .env for PostgreSQL.
+"""
+
 import os
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
@@ -8,9 +14,18 @@ SQLALCHEMY_DATABASE_URL = os.environ.get(
     "sqlite:///./storage/audiobook.db"
 )
 
-connect_args = {"check_same_thread": False} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
+connect_args = {"check_same_thread": False, "timeout": 30} if SQLALCHEMY_DATABASE_URL.startswith("sqlite") else {}
 
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args=connect_args)
+
+if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
+    from sqlalchemy import event
+
+    @event.listens_for(engine, "connect")
+    def set_sqlite_pragma(conn, _):
+        """Enable WAL mode for better concurrent read/write performance."""
+        conn.execute("PRAGMA journal_mode=WAL")
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
@@ -19,6 +34,7 @@ class Base(DeclarativeBase):
 
 
 def get_db():
+    """FastAPI dependency that yields a DB session and closes it when done."""
     db = SessionLocal()
     try:
         yield db

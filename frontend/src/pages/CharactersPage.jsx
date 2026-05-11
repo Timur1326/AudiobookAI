@@ -98,7 +98,7 @@ export default function CharactersPage() {
         </div>
         <Input
           prefix={<SearchOutlined style={{ color: "#9ca3af" }} />}
-          placeholder="Search by name or alias..."
+          placeholder="Search by name"
           value={search}
           onChange={e => setSearch(e.target.value)}
           style={{ width: 240 }}

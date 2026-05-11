@@ -1,3 +1,5 @@
+"""Books router: upload, list, inspect books and serve chapter content."""
+
 import json
 import shutil
 from datetime import datetime
@@ -6,7 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
-from backend.auth import get_current_user, get_current_user_optional
+from backend.auth import get_current_user_optional
 from backend.database import get_db
 from backend.models import Book, Chapter, Paragraph, ParagraphTimestamp, PipelineStep, StepStatus, User
 
@@ -247,164 +249,7 @@ def delete_book(book: str, db: Session = Depends(get_db)):
     return {"ok": True, "deleted": book}
 
 
-# ── GET /books/{book}/chapters/{chapter_id} ───────────────────────────────────
-
-@router.get("/{book}/chapters/{chapter_id}")
-def get_chapter(book: str, chapter_id: int):
-    """Get paragraphs of a chapter with attribution."""
-    data = book_data(book)
-
-    chapter = next((ch for ch in data["chapters"] if ch["id"] == chapter_id), None)
-    if chapter is None:
-        raise HTTPException(status_code=404, detail=f"Chapter {chapter_id} not found")
-
-    if "paragraphs" in chapter:
-        paragraphs = chapter["paragraphs"]
-    else:
-        paragraphs = [
-            p
-            for scene in chapter.get("scenes", [])
-            for p in scene["paragraphs"]
-        ]
-
-    return {
-        "id":         chapter["id"],
-        "title":      chapter["title"],
-        "paragraphs": [
-            {
-                "index":               i,
-                "text":                p["text"],
-                "type":                p["type"],
-                "speaker":             p.get("speaker_ground_truth") or p.get("speaker_llm_context") or p.get("speaker"),
-                "speaker_llm_context": p.get("speaker_llm_context"),
-                "speaker_llm_zeroshot": p.get("speaker_llm_zeroshot"),
-            }
-            for i, p in enumerate(paragraphs)
-        ],
-    }
-
-
 # ── GET /books/{book}/chapters/{chapter_id}/reader ────────────────────────────
-
-import re as _re
-_WORD_RE = _re.compile(r"[a-zA-Z0-9']+")
-
-
-def _words(text: str) -> list[str]:
-    return [w.lower() for w in _WORD_RE.findall(text)]
-
-
-def _map_raw_to_timestamps(raw_paras, split_paras, ts_list):
-    """
-    Match raw paragraphs to time ranges and extract speaker/type from split paras.
-    Goes through split paragraphs in order; for each raw paragraph greedily
-    consumes split paragraphs whose words are largely contained in the raw text.
-    """
-    ts_by_idx = {t["index"]: t for t in ts_list}
-    results   = []
-    sp_cursor = 0
-    n_split   = len(split_paras)
-
-    for raw_idx, raw_para in enumerate(raw_paras):
-        raw_words    = set(_words(raw_para["text"]))
-        matched      = []
-        matched_sps  = []
-
-        temp = sp_cursor
-        while temp < n_split:
-            sp_words = _words(split_paras[temp]["text"])
-            if not sp_words:
-                temp += 1
-                continue
-            overlap = sum(1 for w in sp_words if w in raw_words)
-            if overlap / len(sp_words) >= 0.5:
-                t = ts_by_idx.get(temp)
-                if t:
-                    matched.append(t)
-                matched_sps.append(split_paras[temp])
-                temp += 1
-            else:
-                break
-
-        if matched:
-            sp_cursor = temp
-
-        # Determine speaker and type from matched split paragraphs
-        # Prefer dialogue speaker if any matched split para is dialogue
-        speaker = None
-        para_type = "narration"
-        for sp in matched_sps:
-            sp_type = sp.get("type", "narration")
-            if sp_type == "dialogue":
-                para_type = "dialogue"
-                sp_speaker = (sp.get("speaker_ground_truth")
-                              or sp.get("speaker_llm_context")
-                              or sp.get("speaker"))
-                if sp_speaker:
-                    speaker = sp_speaker
-                    break
-
-        results.append({
-            "index":   raw_idx,
-            "text":    raw_para["text"],
-            "start":   matched[0]["start"]  if matched else None,
-            "end":     matched[-1]["end"]   if matched else None,
-            "speaker": speaker,
-            "type":    para_type,
-        })
-
-    return results
-
-
-def _map_raw_no_timestamps(raw_paras, split_paras):
-    """Map raw paragraphs to speaker/type without timestamps."""
-    n_split   = len(split_paras)
-    results   = []
-    sp_cursor = 0
-
-    for raw_idx, raw_para in enumerate(raw_paras):
-        raw_words   = set(_words(raw_para["text"]))
-        matched_sps = []
-
-        temp = sp_cursor
-        while temp < n_split:
-            sp_words = _words(split_paras[temp]["text"])
-            if not sp_words:
-                temp += 1
-                continue
-            overlap = sum(1 for w in sp_words if w in raw_words)
-            if overlap / len(sp_words) >= 0.5:
-                matched_sps.append(split_paras[temp])
-                temp += 1
-            else:
-                break
-
-        if matched_sps:
-            sp_cursor = temp
-
-        speaker   = None
-        para_type = "narration"
-        for sp in matched_sps:
-            if sp.get("type") == "dialogue":
-                para_type = "dialogue"
-                sp_speaker = (sp.get("speaker_ground_truth")
-                              or sp.get("speaker_llm_context")
-                              or sp.get("speaker"))
-                if sp_speaker:
-                    speaker = sp_speaker
-                    break
-
-        results.append({
-            "index":   raw_idx,
-            "text":    raw_para["text"],
-            "start":   None,
-            "end":     None,
-            "speaker": speaker,
-            "type":    para_type,
-        })
-
-    return results
-
 
 @router.get("/{book}/chapters/{chapter_id}/reader")
 def get_chapter_reader(book: str, chapter_id: int, engine: str = "elevenlabs",
@@ -468,7 +313,7 @@ def get_chapter_reader(book: str, chapter_id: int, engine: str = "elevenlabs",
 
     ts_path = base / "audio" / engine / f"chapter_{chapter_id:02d}_timestamps.json"
     if not ts_path.exists():
-        import synthesize_chapter as sc
+        import core.tts.synthesize_chapter as sc
         sc.build_timestamps_from_segments(book, chapter_id, engine)
 
     ts_by_idx = {}

@@ -8,7 +8,7 @@ import {
   InboxOutlined, ArrowRightOutlined, SearchOutlined, DownloadOutlined,
 } from "@ant-design/icons";
 import { useNavigate } from "react-router-dom";
-import { getBooks, uploadBook, deleteBook, searchGutenberg, importGutenberg } from "../api/client";
+import { getBooks, uploadBook, deleteBook, searchGutenberg, importGutenberg, BASE_URL } from "../api/client";
 
 const { Title, Text } = Typography;
 const { Dragger } = Upload;
@@ -47,7 +47,7 @@ function currentStepLabel(steps) {
 
 function BookCover({ slug }) {
   const [error, setError] = useState(false);
-  const src = `${import.meta.env.VITE_API_URL || "http://localhost:8000"}/books/${slug}/cover`;
+  const src = `${BASE_URL}/books/${slug}/cover`;
 
   if (error) {
     return (
@@ -250,7 +250,6 @@ function GutenbergModal({ open, onClose, onImported }) {
       </Text>
 
       <Search
-        placeholder="e.g. Alice in Wonderland, Sherlock Holmes, Moby Dick..."
         value={query}
         onChange={e => setQuery(e.target.value)}
         onSearch={handleSearch}

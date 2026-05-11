@@ -1,3 +1,5 @@
+"""Ambient router: generate and serve per-scene background sound using Freesound."""
+
 import json
 import os
 import time
@@ -6,6 +8,7 @@ from pathlib import Path
 import requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from backend.database import get_db
@@ -20,13 +23,19 @@ FREESOUND_URL = "https://freesound.org/apiv2"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def load_json(path: Path) -> dict:
+def _load_json(path: Path) -> dict:
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
 
+def _ts_start_end(ts_rows) -> tuple[float | None, float | None]:
+    """Return (min start, max end) from a list of ParagraphTimestamp rows."""
+    starts: list[float] = [t.start for t in ts_rows if t.start is not None]  # type: ignore[misc]
+    ends:   list[float] = [t.end   for t in ts_rows if t.end   is not None]  # type: ignore[misc]
+    return (min(starts) if starts else None, max(ends) if ends else None)
 
-def get_scene_ranges_from_db(db, db_chapter, engine: str) -> list[dict]:
+
+def _get_scene_ranges_from_db(db, db_chapter, engine: str) -> list[dict]:
     """Return [{scene_id, start, end, preview}] for each scene."""
     scenes = (db.query(Scene)
                 .filter(Scene.chapter_id == db_chapter.id)
@@ -46,12 +55,12 @@ def get_scene_ranges_from_db(db, db_chapter, engine: str) -> list[dict]:
                               ParagraphTimestamp.engine == engine)
                       .all())
 
-        start   = min(t.start for t in ts_rows) if ts_rows else None
-        end     = max(t.end   for t in ts_rows) if ts_rows else None
+        start, end = _ts_start_end(ts_rows)
 
         ranges.append({
             "scene_id": scene.id,
             "preview":  scene.preview or "",
+            "location": scene.location or "",
             "start":    start,
             "end":      end,
         })
@@ -59,7 +68,8 @@ def get_scene_ranges_from_db(db, db_chapter, engine: str) -> list[dict]:
     return ranges
 
 
-def freesound_search(query: str, api_key: str) -> dict | None:
+def _freesound_search(query: str, api_key: str) -> dict | None:
+    """Search Freesound for a single best match; returns the first result or None."""
     try:
         r = requests.get(
             f"{FREESOUND_URL}/search/text/",
@@ -79,7 +89,8 @@ def freesound_search(query: str, api_key: str) -> dict | None:
         return None
 
 
-def freesound_download(sound: dict, api_key: str, dest: Path) -> bool:
+def _freesound_download(sound: dict, dest: Path) -> bool:
+    """Download the HQ (or LQ) MP3 preview of a Freesound result to *dest*."""
     if dest.exists():
         return True
     url = sound["previews"].get("preview-hq-mp3") or sound["previews"].get("preview-lq-mp3")
@@ -97,27 +108,26 @@ def freesound_download(sound: dict, api_key: str, dest: Path) -> bool:
         return False
 
 
-def generate_queries_llm(scenes_text: list[str]) -> list[list[str]]:
+
+def _generate_queries_from_locations(locations: list[str]) -> list[list[str]]:
+    """Use Haiku to turn location descriptions into Freesound search queries."""
     import anthropic
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-    numbered = "\n\n".join(
-        f"Scene {i+1}:\n{text[:400]}" for i, text in enumerate(scenes_text)
-    )
+    numbered = "\n".join(f"{i+1}. {loc}" for i, loc in enumerate(locations))
     prompt = (
-        "You are a sound designer for an audiobook. "
-        "For each scene below, generate 3 Freesound.org search queries "
+        "You are a sound designer. For each location below, generate 3 Freesound.org search queries "
         "for ambient background sound — from most specific to most general.\n"
         "Rules:\n"
-        "- Focus on SETTING and MOOD, not the plot\n"
-        "- Use short keyword phrases (2-4 words)\n"
-        "- Third query must always return results (use generic: nature/indoor/outdoor)\n"
-        "- Return ONLY valid JSON array: [[q1,q2,q3], [q1,q2,q3], ...]\n\n"
-        f"{numbered}"
+        "- Short keyword phrases (2-4 words)\n"
+        "- Focus on the acoustic character of the place\n"
+        "- Each query must be different, third must be generic enough to always return results\n"
+        "- Return ONLY valid JSON array: [[q1,q2,q3], ...]\n\n"
+        f"Locations:\n{numbered}"
     )
     msg = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1024,
+        model="claude-haiku-4-5-20251001",
+        max_tokens=512,
         messages=[{"role": "user", "content": prompt}],
     )
     raw = msg.content[0].text.strip()
@@ -158,15 +168,16 @@ def _generate_ambient_bg(book: str, chapter_id: int, engine: str):
                 return
 
             # Get scene ranges from DB — no JSON files needed
-            scene_ranges = get_scene_ranges_from_db(db, db_chapter, engine)
+            scene_ranges = _get_scene_ranges_from_db(db, db_chapter, engine)
             if not scene_ranges:
                 _set_ambient_status(book, chapter_id, engine, "error",
                                     "No scenes found — run scene detection pipeline step first")
                 return
 
-            scenes_text       = [r["preview"] for r in scene_ranges]
-            queries_per_scene = generate_queries_llm(scenes_text)
-            freesound_key     = os.environ.get("FREESOUND_API_KEY", "")
+            freesound_key = os.environ.get("FREESOUND_API_KEY", "")
+
+            locations = [r["location"] or "indoor quiet room" for r in scene_ranges]
+            queries_per_scene = _generate_queries_from_locations(locations)
 
             # Remove old ambient scenes for scenes of this chapter+engine
             scene_ids = [r["scene_id"] for r in scene_ranges]
@@ -180,10 +191,10 @@ def _generate_ambient_bg(book: str, chapter_id: int, engine: str):
 
                 if freesound_key:
                     for q in queries:
-                        result = freesound_search(q, freesound_key)
+                        result = _freesound_search(q, freesound_key)
                         if result:
                             dest = AMBIENT_CACHE / f"{result['id']}.mp3"
-                            if freesound_download(result, freesound_key, dest):
+                            if _freesound_download(result, dest):
                                 sound_url = f"/ambient-files/{result['id']}.mp3"
                                 break
                         time.sleep(0.3)
@@ -216,7 +227,7 @@ def generate_ambient(book: str, chapter_id: int, background_tasks: BackgroundTas
     status_path = STORAGE_DIR / book / "audio" / engine / f"chapter_{chapter_id:02d}_ambient_status.json"
 
     if status_path.exists():
-        status = load_json(status_path).get("status")
+        status = _load_json(status_path).get("status")
         if status == "running":
             raise HTTPException(409, "Ambient generation already running")
 
@@ -232,7 +243,7 @@ def get_ambient(book: str, chapter_id: int, engine: str = "elevenlabs",
     status_path = STORAGE_DIR / book / "audio" / engine / f"chapter_{chapter_id:02d}_ambient_status.json"
     status = "none"
     if status_path.exists():
-        status = load_json(status_path).get("status", "none")
+        status = _load_json(status_path).get("status", "none")
 
     # Load scenes from DB
     db_book = db.query(Book).filter(Book.slug == book).first()
@@ -259,24 +270,23 @@ def get_ambient(book: str, chapter_id: int, engine: str = "elevenlabs",
 
     ambient_by_scene = {a.scene_id: a for a in ambient_rows}
 
-    if ambient_rows:
-        return {
-            "status": "done",
-            "scenes": [
-                {
-                    "scene_index": s.scene_index,
-                    "scene_id":    s.id,
-                    "start":       ambient_by_scene[s.id].start     if s.id in ambient_by_scene else None,
-                    "end":         ambient_by_scene[s.id].end       if s.id in ambient_by_scene else None,
-                    "sound_url":   ambient_by_scene[s.id].sound_url if s.id in ambient_by_scene else None,
-                    "queries":     json.loads(ambient_by_scene[s.id].queries)
-                                   if s.id in ambient_by_scene and ambient_by_scene[s.id].queries else [],
-                }
-                for s in db_scenes
-            ],
-        }
-
-    return {"status": status, "scenes": []}
+    return {
+        "status": "done" if ambient_rows else status,
+        "scenes": [
+            {
+                "scene_index": s.scene_index,
+                "scene_id":    s.id,
+                "preview":     s.preview or "",
+                "location":    s.location or "",
+                "start":       ambient_by_scene[s.id].start     if s.id in ambient_by_scene else None,
+                "end":         ambient_by_scene[s.id].end       if s.id in ambient_by_scene else None,
+                "sound_url":   ambient_by_scene[s.id].sound_url if s.id in ambient_by_scene else None,
+                "queries":     json.loads(str(ambient_by_scene[s.id].queries))
+                               if s.id in ambient_by_scene and ambient_by_scene[s.id].queries else [],
+            }
+            for s in db_scenes
+        ],
+    }
 
 
 @router.get("/ambient-files/{filename}")
@@ -286,3 +296,177 @@ def serve_ambient_file(filename: str):
     if not path.exists():
         raise HTTPException(404, "Ambient file not found")
     return FileResponse(str(path), media_type="audio/mpeg")
+
+
+# ── GET /books/{book}/ambient/search ─────────────────────────────────────────
+
+@router.get("/{book}/ambient/search")
+def ambient_search(book: str, q: str):
+    """Search Freesound by keyword, return 5 results with preview URLs."""
+    api_key = os.environ.get("FREESOUND_API_KEY", "")
+    if not api_key:
+        raise HTTPException(400, "FREESOUND_API_KEY not configured")
+    try:
+        r = requests.get(
+            f"{FREESOUND_URL}/search/text/",
+            params={
+                "query":     q,
+                "fields":    "id,name,duration,previews",
+                "filter":    "duration:[20 TO *]",
+                "sort":      "rating_desc",
+                "page_size": 5,
+                "token":     api_key,
+            },
+            timeout=6,
+        )
+        results = r.json().get("results", [])
+        return {
+            "results": [
+                {
+                    "id":          s["id"],
+                    "name":        s["name"],
+                    "duration":    round(s["duration"]),
+                    "preview_url": s["previews"].get("preview-hq-mp3") or s["previews"].get("preview-lq-mp3"),
+                }
+                for s in results
+            ]
+        }
+    except Exception as e:
+        raise HTTPException(500, str(e))
+
+
+# ── POST /books/{book}/chapters/{chapter_id}/ambient/assign ───────────────────
+
+class AssignAmbientRequest(BaseModel):
+    sound_id:    int
+    preview_url: str
+    engine:      str = "elevenlabs"
+
+
+@router.post("/{book}/chapters/{chapter_id}/ambient/assign")
+def assign_ambient(book: str, chapter_id: int, body: AssignAmbientRequest,
+                   db: Session = Depends(get_db)):
+    """Download a Freesound preview and assign it to all scenes of a chapter."""
+    db_book = db.query(Book).filter(Book.slug == book).first()
+    if not db_book:
+        raise HTTPException(404, "Book not found")
+
+    db_chapter = db.query(Chapter).filter(
+        Chapter.book_id    == db_book.id,
+        Chapter.chapter_id == chapter_id,
+    ).first()
+    if not db_chapter:
+        raise HTTPException(404, "Chapter not found")
+
+    # Download preview to cache
+    dest      = AMBIENT_CACHE / f"{body.sound_id}.mp3"
+    sound_url = f"/ambient-files/{body.sound_id}.mp3"
+    if not dest.exists():
+        try:
+            resp = requests.get(body.preview_url, timeout=30)
+            if resp.status_code != 200:
+                raise HTTPException(502, "Failed to download sound from Freesound")
+            AMBIENT_CACHE.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(resp.content)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(500, str(e))
+
+    scenes = db.query(Scene).filter(Scene.chapter_id == db_chapter.id).all()
+    if not scenes:
+        raise HTTPException(400, "No scenes found — run scene detection first")
+
+    scene_ids = [s.id for s in scenes]
+    db.query(AmbientScene).filter(
+        AmbientScene.scene_id.in_(scene_ids),
+        AmbientScene.engine == body.engine,
+    ).delete(synchronize_session=False)
+
+    for scene in scenes:
+        para_ids = [p.id for p in db.query(Paragraph).filter(Paragraph.scene_id == scene.id).all()]
+        ts_rows  = db.query(ParagraphTimestamp).filter(
+            ParagraphTimestamp.paragraph_id.in_(para_ids),
+            ParagraphTimestamp.engine == body.engine,
+        ).all() if para_ids else []
+
+        scene_id: int = scene.id  # type: ignore[assignment]
+        ts_start, ts_end = _ts_start_end(ts_rows)
+        db.add(AmbientScene(
+            scene_id  = scene_id,
+            engine    = body.engine,
+            start     = ts_start,
+            end       = ts_end,
+            sound_url = sound_url,
+            queries   = json.dumps([]),
+        ))
+
+    db.commit()
+
+    # Write done status file so ChapterPage picks it up
+    status_path = STORAGE_DIR / book / "audio" / body.engine / f"chapter_{chapter_id:02d}_ambient_status.json"
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(json.dumps({"status": "done", "error": ""}))
+
+    return {"ok": True, "sound_url": sound_url}
+
+
+# ── POST /books/scenes/{scene_id}/ambient/assign ──────────────────────────────
+
+class AssignSceneAmbientRequest(BaseModel):
+    sound_id:    int
+    preview_url: str
+    engine:      str = "elevenlabs"
+
+
+@router.post("/scenes/{scene_id}/ambient/assign")
+def assign_scene_ambient(scene_id: int, body: AssignSceneAmbientRequest,
+                         db: Session = Depends(get_db)):
+    """Download a Freesound preview and assign it to a specific scene."""
+    scene = db.query(Scene).filter(Scene.id == scene_id).first()
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+
+    dest      = AMBIENT_CACHE / f"{body.sound_id}.mp3"
+    sound_url = f"/ambient-files/{body.sound_id}.mp3"
+    if not dest.exists():
+        try:
+            resp = requests.get(body.preview_url, timeout=30)
+            if resp.status_code != 200:
+                raise HTTPException(502, "Failed to download sound from Freesound")
+            AMBIENT_CACHE.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(resp.content)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(500, str(e))
+
+    para_ids = [p.id for p in db.query(Paragraph).filter(Paragraph.scene_id == scene_id).all()]
+    ts_rows  = db.query(ParagraphTimestamp).filter(
+        ParagraphTimestamp.paragraph_id.in_(para_ids),
+        ParagraphTimestamp.engine == body.engine,
+    ).all() if para_ids else []
+
+    existing = db.query(AmbientScene).filter(
+        AmbientScene.scene_id == scene_id,
+        AmbientScene.engine   == body.engine,
+    ).first()
+
+    ts_start, ts_end = _ts_start_end(ts_rows)
+    if existing:
+        existing.sound_url = sound_url
+        if ts_start is not None:
+            existing.start = ts_start
+            existing.end   = ts_end
+    else:
+        db.add(AmbientScene(
+            scene_id  = scene_id,
+            engine    = body.engine,
+            start     = ts_start,
+            end       = ts_end,
+            sound_url = sound_url,
+            queries   = json.dumps([]),
+        ))
+
+    db.commit()
+    return {"ok": True, "sound_url": sound_url}
