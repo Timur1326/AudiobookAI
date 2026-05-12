@@ -151,6 +151,32 @@ def build_timestamps_from_segments(book: str, chapter_id: int, engine: str) -> P
 
 
 
+def _auto_build_xtts_map(book_slug: str, book_id: int, db, DBCharacter) -> None:
+    """Build voice_map_xtts.json from DB characters + ElevenLabs preview downloads.
+
+    Used as a fallback when step 6 was run before voice_map_elevenlabs.json was introduced.
+    """
+    vm_path = STORAGE_DIR / book_slug / "voice_map_elevenlabs.json"
+    if not vm_path.exists():
+        chars = db.query(DBCharacter).filter(
+            DBCharacter.book_id == book_id,
+            DBCharacter.voice_id.isnot(None),
+        ).all()
+        if not chars:
+            return
+        vm = {c.name: c.voice_id for c in chars}
+        vm_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(vm_path, "w", encoding="utf-8") as f:
+            json.dump(vm, f, ensure_ascii=False, indent=2)
+        print(f"Auto-generated voice_map_elevenlabs.json from DB ({len(vm)} characters)")
+
+    try:
+        from core.tts.download_voices import download_voices
+        download_voices(book_slug)
+    except Exception as e:
+        print(f"Warning: voice download failed: {e}")
+
+
 def _build_voice_map(engine: str, book_slug: str, book_id: int, db) -> tuple[dict, list]:
     """Load {character_name: voice_id} and the list of Character DB objects.
 
@@ -162,6 +188,8 @@ def _build_voice_map(engine: str, book_slug: str, book_id: int, db) -> tuple[dic
 
     if engine == "xtts":
         xtts_map_path = STORAGE_DIR / book_slug / "voice_map_xtts.json"
+        if not xtts_map_path.exists():
+            _auto_build_xtts_map(book_slug, book_id, db, DBCharacter)
         voice_map = _load_json(xtts_map_path) if xtts_map_path.exists() else {}
         chars = db.query(DBCharacter).filter(
             DBCharacter.book_id == book_id,

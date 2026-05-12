@@ -9,6 +9,7 @@ import json
 import os
 import re
 import time
+from pathlib import Path
 
 import anthropic
 from dotenv import load_dotenv
@@ -240,7 +241,7 @@ def _apply_style_map(style_map: dict, db_chars: list, name_to_char: dict) -> int
     return styled
 
 
-def run_on_db(book_id: int, db, engine: str = "elevenlabs") -> None:
+def run_on_db(book_id: int, db, engine: str = "elevenlabs", book_slug: str | None = None) -> None:
     """Assign TTS voices and style parameters to characters in DB.
 
     Fetches voices from ElevenLabs, uses LLM to cast each character,
@@ -288,6 +289,13 @@ def run_on_db(book_id: int, db, engine: str = "elevenlabs") -> None:
     assigned = _apply_voice_map(voice_map, db_chars, name_to_char, engine)
     db.commit()
     print(f"Assigned voices to {assigned}/{len(db_chars)} characters in DB.")
+
+    if book_slug:
+        vm_path = Path(f"storage/uploads/{book_slug}/voice_map_elevenlabs.json")
+        vm_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(vm_path, "w", encoding="utf-8") as f:
+            json.dump(voice_map, f, ensure_ascii=False, indent=2)
+        print(f"voice_map_elevenlabs.json saved: {vm_path}")
 
     print("Assigning voice style parameters...")
     try:

@@ -141,7 +141,7 @@ def run_pipeline_steps(book_slug: str, book_id: int, steps: list[int], engine: s
 
             elif step_num == 6:
                 from core.nlp.voice_assigner import run_on_db as voice_run_on_db
-                voice_run_on_db(book_id=book_id, db=db, engine=engine)
+                voice_run_on_db(book_id=book_id, db=db, engine=engine, book_slug=book_slug)
                 # Auto-download ElevenLabs voice previews for XTTS cloning
                 try:
                     from core.tts.download_voices import download_voices
