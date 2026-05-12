@@ -131,8 +131,6 @@ ELEVENLABS_API_KEY=...
 FREESOUND_API_KEY=
 ```
 
-The application reads `.env` automatically on startup — no export needed.
-
 ---
 
 ## Running the Application
