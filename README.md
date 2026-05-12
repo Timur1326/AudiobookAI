@@ -187,7 +187,10 @@ Audiobook/
 │       └── api/client.js   # Axios API client
 ├── experiments/            # Evaluation and annotation tools (optional)
 │   ├── annotation_tool.py       # CLI for labelling ground-truth speakers
-│   └── evaluate_attribution.py  # accuracy report vs ground truth
+│   ├── evaluate_attribution.py  # accuracy report vs ground truth
+│   └── ground_truth/            # manually annotated datasets for evaluation
+│       ├── alice_ground_truth.json       # Alice in Wonderland speaker labels
+│       └── the_gambler_ground_truth.json # The Gambler speaker labels
 ├── .env.example            # environment variable template
 ├── requirements.txt        # Python dependencies
 └── README.md               # this file

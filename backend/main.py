@@ -41,7 +41,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Audiobook API", version="0.1.0", lifespan=lifespan)
+app = FastAPI(title="AudiobookAI API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -72,4 +72,4 @@ def serve_ambient(filename: str):
 
 @app.get("/")
 def root():
-    return {"status": "ok", "message": "Audiobook API"}
+    return {"status": "ok", "message": "AudiobookAI API"}
