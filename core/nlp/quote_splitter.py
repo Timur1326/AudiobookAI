@@ -8,45 +8,47 @@ becomes three paragraphs: narration / dialogue / dialogue.
 
 import re
 
-# Matches fully closed quotes: “text” or “text” (curly quotes)
-QUOTE_RE = re.compile(r'[“”](.*?)[“”]', re.DOTALL)
+# Matches fully closed double quotes (curly or straight) OR single quotes at word boundaries.
+# Single-quote pattern uses word-boundary guards to skip apostrophes in words like "Alice's".
+QUOTE_RE = re.compile(
+    r'[“”"](.*?)[“”"]|(?<!\w)\'(.*?)\'(?!\w)',
+    re.DOTALL,
+)
 
-# Matches an opening quote with no closing quote (runs to end of string)
-UNCLOSED_QUOTE_RE = re.compile(r'[“””](.*?)$', re.DOTALL)
+# Matches an opening quote with no closing quote running to end of string
+UNCLOSED_QUOTE_RE = re.compile(r'[“”"\'](.*?)$', re.DOTALL)
+
+
+def _quote_text(m: re.Match) -> str:
+    # group 1 = double-quote match, group 2 = single-quote match
+    g1 = m.group(1)
+    g2 = m.group(2)
+    return (g1 if g1 is not None else (g2 if g2 is not None else "")).strip()
 
 
 def find_speaker(context: str, known_speakers: set[str]) -> str | None:
     # Returns the first known speaker name found in context, or None.
     if not context.strip():
         return None
-
     context_lower = context.lower()
     for name in known_speakers:
         if name.lower() in context_lower:
             return name
-
     return None
 
 
 def split_paragraph(para: dict, known_speakers: set[str]) -> list[dict]:
-    """Split a mixed paragraph into separate narration and dialogue parts.
-
-    Looks for quoted strings and extracts them as dialogue paragraphs.
-    The surrounding text becomes narration. Speaker is inferred from
-    the text immediately before or after each quote.
-
-    Returns the original paragraph unchanged if no meaningful split is possible.
-    """
+    """Split a mixed paragraph into separate narration and dialogue parts."""
     text = para["text"]
     matches = list(QUOTE_RE.finditer(text))
 
     if not matches:
-        # No closed quotes — check for an unclosed quote running to end of string
         m = UNCLOSED_QUOTE_RE.search(text)
         if not m:
             return [para]
         before = text[:m.start()].strip().strip('",;: ')
-        quote  = m.group(1).strip()
+        g1 = m.group(1)
+        quote = (g1 if g1 is not None else "").strip()
         if not quote:
             return [para]
         parts = []
@@ -63,9 +65,9 @@ def split_paragraph(para: dict, known_speakers: set[str]) -> list[dict]:
 
     for m in matches:
         before     = text[cursor:m.start()].strip().strip('",;: ')
-        quote      = m.group(1).strip()
+        quote      = _quote_text(m)
         cursor     = m.end()
-        after_peek = text[cursor:cursor + 100]  # brief look-ahead for attribution
+        after_peek = text[cursor:cursor + 100]
 
         if len(before) > 3:
             parts.append(_make_para(para, before, "narration", None))
@@ -102,12 +104,7 @@ def _make_para(source: dict, text: str, ptype: str, speaker: str | None) -> dict
 
 
 def _needs_splitting(para: dict) -> bool:
-    """Return True if the paragraph contains quotes that should be extracted.
-
-    Narration paragraphs with any quotes always need splitting.
-    Dialogue paragraphs need splitting only when the quoted portion is less
-    than 85% of the text (meaning there is significant surrounding narration).
-    """
+    """Return True if the paragraph contains quotes that should be extracted."""
     text = para["text"]
 
     closed_matches = list(QUOTE_RE.finditer(text))
@@ -120,7 +117,7 @@ def _needs_splitting(para: dict) -> bool:
         return True
 
     if para["type"] == "dialogue" and closed_matches:
-        quoted_len = sum(len(m.group(1)) for m in closed_matches)
+        quoted_len = sum(len(_quote_text(m)) for m in closed_matches)
         return quoted_len < len(text) * 0.85
 
     return False
@@ -143,12 +140,7 @@ def collect_speakers_from_db(book_id: int, db) -> set[str]:
 
 
 def run_on_db(book_id: int, db, chapter_id: int | None = None) -> None:
-    """Split mixed paragraphs into narration + dialogue parts and re-index.
-
-    Deletes all paragraphs for each chapter and re-inserts them with updated
-    indexes. scene_id is reset to None since scene detection must be re-run
-    after splitting changes the paragraph structure.
-    """
+    """Split mixed paragraphs into narration + dialogue parts and re-index."""
     from backend.models import Paragraph as DBParagraph, Chapter as DBChapter
 
     known_speakers = collect_speakers_from_db(book_id, db)
@@ -184,21 +176,20 @@ def run_on_db(book_id: int, db, chapter_id: int | None = None) -> None:
             else:
                 new_paras.append(para_dict)
 
-        # Replace all paragraphs for this chapter with re-indexed versions
         db.query(DBParagraph).filter(DBParagraph.chapter_id == ch.id).delete()
         db.flush()
 
         for i, p in enumerate(new_paras):
             db.add(DBParagraph(
                 chapter_id=ch.id,
-                scene_id=None,  # scenes are re-detected in next pipeline step
+                scene_id=None,
                 index=i,
                 text=p["text"],
                 type=p["type"],
                 speaker=p.get("speaker") if p["type"] == "dialogue" else None,
             ))
 
-        print(f"  [{ch.chapter_id}] {ch.title[:50]:<50} {len(db_paras)} → {len(new_paras)}  (+{splits} splits)")
+        print(f"  [{ch.chapter_id}] {ch.title[:50]:<50} {len(db_paras)} -> {len(new_paras)}  (+{splits} splits)")
 
     db.commit()
     print("Quote splitting done.")
