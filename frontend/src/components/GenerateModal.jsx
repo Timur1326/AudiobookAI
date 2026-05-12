@@ -422,7 +422,14 @@ function AmbientStep({ book, chapters, chapterIds, engine, onDone }) {
     setSuggesting(prev => ({ ...prev, [chId]: true }));
     try {
       await generateAmbient(book, chId, engine);
+      const deadline = Date.now() + 120_000; // 2-minute timeout
       pollRefs.current[chId] = setInterval(async () => {
+        if (Date.now() > deadline) {
+          clearInterval(pollRefs.current[chId]);
+          setSuggesting(prev => ({ ...prev, [chId]: false }));
+          message.error("Ambient generation timed out");
+          return;
+        }
         const r = await getAmbientConfig(book, chId, engine);
         if (r.data.status === "done") {
           clearInterval(pollRefs.current[chId]);
