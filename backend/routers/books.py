@@ -187,6 +187,7 @@ def get_book(book: str, db: Session = Depends(get_db)):
             "index":        ch.chapter_index,
             "title":        ch.title,
             "synth_status": ch.synth_status,
+            "synth_engine": ch.synth_engine,
             "audio_path":   ch.audio_path,
         }
         for ch in db_book.chapters

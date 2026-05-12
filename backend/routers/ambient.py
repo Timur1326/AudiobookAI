@@ -153,40 +153,37 @@ def _generate_ambient_bg(book: str, chapter_id: int, engine: str):
     _set_ambient_status(book, chapter_id, engine, "running")
 
     from backend.database import SessionLocal
-    db = SessionLocal()
     try:
-        db_book = db.query(Book).filter(Book.slug == book).first()
-        if not db_book:
-            raise ValueError("Book not found in DB")
+        # Phase 1: read-only — get scene data then close the session immediately
+        db = SessionLocal()
+        try:
+            db_book = db.query(Book).filter(Book.slug == book).first()
+            if not db_book:
+                raise ValueError("Book not found in DB")
+            db_chapter = db.query(Chapter).filter(
+                Chapter.book_id == db_book.id,
+                Chapter.chapter_id == chapter_id,
+            ).first()
+            if not db_chapter:
+                raise ValueError("Chapter not found in DB")
+            scene_ranges = _get_scene_ranges_from_db(db, db_chapter, engine)
+        finally:
+            db.close()
 
-        db_chapter = db.query(Chapter).filter(
-            Chapter.book_id == db_book.id,
-            Chapter.chapter_id == chapter_id,
-        ).first()
-        if not db_chapter:
-            raise ValueError("Chapter not found in DB")
-
-        scene_ranges = _get_scene_ranges_from_db(db, db_chapter, engine)
         print(f"[ambient] {len(scene_ranges)} scenes found")
         if not scene_ranges:
             raise ValueError("No scenes found — run scene detection pipeline step first")
 
+        # Phase 2: external API calls (no DB session held)
         freesound_key = os.environ.get("FREESOUND_API_KEY", "")
-
         locations = [r["location"] or "indoor quiet room" for r in scene_ranges]
         print(f"[ambient] calling Anthropic for {len(locations)} locations...")
         queries_per_scene = _generate_queries_from_locations(locations)
         print(f"[ambient] Anthropic done, got {len(queries_per_scene)} query sets")
 
-        scene_ids = [r["scene_id"] for r in scene_ranges]
-        db.query(AmbientScene).filter(
-            AmbientScene.scene_id.in_(scene_ids),
-            AmbientScene.engine == engine,
-        ).delete(synchronize_session=False)
-
+        results = []
         for queries, rng in zip(queries_per_scene, scene_ranges):
             sound_url = None
-
             if freesound_key:
                 for q in queries:
                     result = _freesound_search(q, freesound_key)
@@ -196,25 +193,37 @@ def _generate_ambient_bg(book: str, chapter_id: int, engine: str):
                             sound_url = f"/ambient-files/{result['id']}.mp3"
                             break
                     time.sleep(0.3)
+            results.append((queries, rng, sound_url))
 
-            db.add(AmbientScene(
-                scene_id=rng["scene_id"],
-                engine=engine,
-                start=rng["start"],
-                end=rng["end"],
-                sound_url=sound_url,
-                queries=json.dumps(queries),
-            ))
+        # Phase 3: write — open a fresh session just for the DB writes
+        db = SessionLocal()
+        try:
+            scene_ids = [r["scene_id"] for r in scene_ranges]
+            db.query(AmbientScene).filter(
+                AmbientScene.scene_id.in_(scene_ids),
+                AmbientScene.engine == engine,
+            ).delete(synchronize_session=False)
 
-        db.commit()
+            for queries, rng, sound_url in results:
+                db.add(AmbientScene(
+                    scene_id=rng["scene_id"],
+                    engine=engine,
+                    start=rng["start"],
+                    end=rng["end"],
+                    sound_url=sound_url,
+                    queries=json.dumps(queries),
+                ))
+
+            db.commit()
+        finally:
+            db.close()
+
         print(f"[ambient] DONE book={book} ch={chapter_id}")
         _set_ambient_status(book, chapter_id, engine, "done")
 
     except Exception as e:
         print(f"[ambient] ERROR book={book} ch={chapter_id}: {e}")
         _set_ambient_status(book, chapter_id, engine, "error", str(e))
-    finally:
-        db.close()
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
