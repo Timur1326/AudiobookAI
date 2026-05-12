@@ -67,9 +67,9 @@ Download from https://ffmpeg.org/download.html and add to `PATH`.
 
 | Key | Required | Purpose |
 |-----|----------|---------|
-| `ANTHROPIC_API_KEY` | Yes | Quote splitting, character extraction, attribution, voice assignment |
-| `ELEVENLABS_API_KEY` | Yes (for ElevenLabs TTS) | Voice synthesis and voice listing |
-| `FREESOUND_API_KEY` | No | Ambient sound search and download |
+| `ANTHROPIC_API_KEY` | Yes      | Quote splitting, character extraction, attribution, voice assignment |
+| `ELEVENLABS_API_KEY` | Yes      | Voice synthesis and voice listing |
+| `FREESOUND_API_KEY` | No       | Ambient sound search and download |
 
 - Anthropic: https://console.anthropic.com/
 - ElevenLabs: https://elevenlabs.io/
