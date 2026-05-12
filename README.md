@@ -79,14 +79,7 @@ Download from https://ffmpeg.org/download.html and add to `PATH`.
 
 ## Installation
 
-### 1. Clone or download the project
-
-```bash
-git clone <repository-url>
-cd Audiobook
-```
-
-### 2. Create a Python virtual environment
+### 1. Create a Python virtual environment
 
 ```bash
 python3.11 -m venv venv
@@ -102,7 +95,7 @@ source venv/bin/activate
 venv\Scripts\activate
 ```
 
-### 3. Install Python dependencies
+### 2. Install Python dependencies
 
 ```bash
 pip install -r requirements.txt
@@ -110,7 +103,7 @@ pip install -r requirements.txt
 
 > **Note:** The `TTS` package (Coqui XTTS) is large (~2 GB including model weights). If you only plan to use ElevenLabs for synthesis, you can skip it by commenting out the `TTS` line in `requirements.txt` before installing.
 
-### 4. Install frontend dependencies
+### 3. Install frontend dependencies
 
 ```bash
 cd frontend
@@ -136,7 +129,6 @@ ELEVENLABS_API_KEY=...
 
 # Optional
 FREESOUND_API_KEY=
-SECRET_KEY=change-me-in-production
 ```
 
 The application reads `.env` automatically on startup — no export needed.
@@ -145,7 +137,6 @@ The application reads `.env` automatically on startup — no export needed.
 
 ## Running the Application
 
-You need **two terminals** running simultaneously.
 
 ### Terminal 1 — Backend (FastAPI)
 
@@ -167,21 +158,6 @@ npm run dev
 ```
 
 The web app will be available at **http://localhost:5173**.
-
----
-
-## Quick Start
-
-1. Open **http://localhost:5173** in your browser.
-2. Register an account (any email and password — stored locally in SQLite).
-3. Click **Upload book** and select an EPUB file, or use **Search** to import a book from Project Gutenberg.
-4. After upload, the book appears in your library. Click **Open**.
-5. On the book page, click **Generate** to open the pipeline dialog.
-6. Select the synthesis engine (**ElevenLabs** or **XTTS**) and click **Run**.
-7. Wait for all 7 steps to complete (progress is shown in real time).
-8. Once done, open any chapter and press **Play** to listen, or click **Download** to save the MP3.
-
-> Steps can be re-run individually if something fails — click the step name in the Generate dialog to re-trigger only that step.
 
 ---
 
@@ -224,5 +200,4 @@ Audiobook/
 ## Notes
 
 - The SQLite database (`audiobook.db`) and all generated audio files are created automatically in `storage/` on first run.
-- The application uses background threads for the pipeline, so the UI remains responsive during processing.
 - For XTTS local synthesis, a CUDA-capable GPU is strongly recommended; CPU synthesis works but is very slow.
