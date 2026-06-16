@@ -1,6 +1,6 @@
 # Creating Audiobooks with AI
 
-A web application that converts EPUB books into multi-voice audiobooks using a 7-step AI pipeline powered by Claude (Anthropic) and ElevenLabs.
+A web application that converts EPUB books into multi-voice audiobooks using a 7-step AI pipeline powered by Claude (Anthropic) and **ElevenLabs**.
 
 ---
 
