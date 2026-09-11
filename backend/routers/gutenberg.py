@@ -12,7 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from backend.auth import get_current_user_optional
+from backend.auth import get_current_user
 from backend.database import get_db
 from backend.models import Book, Chapter, PipelineStep, StepStatus, User
 
@@ -156,7 +156,7 @@ class ImportRequest(BaseModel):
 
 @router.post("/gutenberg/import")
 def import_gutenberg(body: ImportRequest, db: Session = Depends(get_db),
-                     current_user: User | None = Depends(get_current_user_optional)):
+                     current_user: User = Depends(get_current_user)):
     """Download EPUB from Gutenberg and import it as a new book."""
     # Build slug from gutenberg id + title
     safe_title = "".join(c if c.isalnum() or c in " _-" else "" for c in body.title.lower())
@@ -194,7 +194,7 @@ def import_gutenberg(body: ImportRequest, db: Session = Depends(get_db),
         title=body.title,
         author=body.author,
         epub_path=str(epub_path),
-        user_id=current_user.id if current_user else None,
+        user_id=current_user.id,
     )
     db.add(book)
     db.flush()

@@ -19,20 +19,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backend.auth import get_owned_book
 from backend.database import SessionLocal, get_db
 from backend.models import AmbientScene, Book, Chapter, Paragraph, ParagraphTimestamp, PipelineStep, Scene, StepStatus
 
 router = APIRouter()
 
 STORAGE_DIR = Path("storage/uploads")
-
-
-def get_book_or_404(slug: str, db: Session) -> Book:
-    """Return the Book for the given slug or raise HTTP 404."""
-    book = db.query(Book).filter(Book.slug == slug).first()
-    if not book:
-        raise HTTPException(status_code=404, detail=f"Book '{slug}' not found")
-    return book
 
 
 def set_step_status(book_id: int, step: int, status: StepStatus, error: str = None):
@@ -169,10 +162,9 @@ class PipelineRunRequest(BaseModel):
 
 
 @router.post("/{book}/pipeline/run")
-def run_pipeline(book: str, body: PipelineRunRequest, db: Session = Depends(get_db)):
+def run_pipeline(book: str, body: PipelineRunRequest, db: Session = Depends(get_db),
+                 db_book: Book = Depends(get_owned_book)):
     """Start pipeline steps in background. Poll GET /books/{book} for status."""
-    db_book = get_book_or_404(book, db)
-
     # Check nothing is already running
     running = db.query(PipelineStep).filter(
         PipelineStep.book_id == db_book.id,
@@ -206,10 +198,8 @@ def run_pipeline(book: str, body: PipelineRunRequest, db: Session = Depends(get_
 # ── POST /books/{book}/pipeline/reset ────────────────────────────────────────
 
 @router.post("/{book}/pipeline/reset")
-def reset_pipeline(book: str, db: Session = Depends(get_db)):
+def reset_pipeline(book: str, db: Session = Depends(get_db), db_book: Book = Depends(get_owned_book)):
     """Reset all pipeline steps to pending (for reprocessing)."""
-    db_book = get_book_or_404(book, db)
-
     steps = db.query(PipelineStep).filter(PipelineStep.book_id == db_book.id).all()
     for s in steps:
         if s.step > 1:  # keep step 1 (parse) as done
@@ -229,10 +219,9 @@ class SynthesizeBatchRequest(BaseModel):
 
 
 @router.post("/{book}/synthesize-batch")
-def synthesize_batch(book: str, body: SynthesizeBatchRequest, db: Session = Depends(get_db)):
+def synthesize_batch(book: str, body: SynthesizeBatchRequest, db: Session = Depends(get_db),
+                     db_book: Book = Depends(get_owned_book)):
     """Synthesize multiple chapters in background."""
-    db_book = get_book_or_404(book, db)
-
     # Reject if any of the requested chapters is already being synthesized
     already_running = db.query(Chapter).filter(
         Chapter.book_id    == db_book.id,

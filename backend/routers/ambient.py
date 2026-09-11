@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backend.auth import get_owned_book, get_owned_scene
 from backend.database import get_db
 from backend.models import AmbientScene, Book, Chapter, Paragraph, ParagraphTimestamp, Scene
 
@@ -230,7 +231,7 @@ def _generate_ambient_bg(book: str, chapter_id: int, engine: str):
 
 @router.post("/{book}/chapters/{chapter_id}/ambient/generate")
 def generate_ambient(book: str, chapter_id: int, background_tasks: BackgroundTasks,
-                     engine: str = "elevenlabs"):
+                     engine: str = "elevenlabs", db_book: Book = Depends(get_owned_book)):
     """Start ambient sound generation for a chapter (runs in background)."""
     status_path = STORAGE_DIR / book / "audio" / engine / f"chapter_{chapter_id:02d}_ambient_status.json"
 
@@ -247,18 +248,13 @@ def generate_ambient(book: str, chapter_id: int, background_tasks: BackgroundTas
 
 @router.get("/{book}/chapters/{chapter_id}/ambient")
 def get_ambient(book: str, chapter_id: int, engine: str = "elevenlabs",
-                db: Session = Depends(get_db)):
+                db: Session = Depends(get_db), db_book: Book = Depends(get_owned_book)):
     """Return ambient config + generation status for a chapter."""
     # Check status file
     status_path = STORAGE_DIR / book / "audio" / engine / f"chapter_{chapter_id:02d}_ambient_status.json"
     status = "none"
     if status_path.exists():
         status = _load_json(status_path).get("status", "none")
-
-    # Load scenes from DB
-    db_book = db.query(Book).filter(Book.slug == book).first()
-    if not db_book:
-        return {"status": status, "scenes": []}
 
     db_chapter = db.query(Chapter).filter(
         Chapter.book_id == db_book.id,
@@ -311,7 +307,7 @@ def serve_ambient_file(filename: str):
 # ── GET /books/{book}/ambient/search ─────────────────────────────────────────
 
 @router.get("/{book}/ambient/search")
-def ambient_search(book: str, q: str):
+def ambient_search(book: str, q: str, db_book: Book = Depends(get_owned_book)):
     """Search Freesound by keyword, return 5 results with preview URLs."""
     api_key = os.environ.get("FREESOUND_API_KEY", "")
     if not api_key:
@@ -355,12 +351,8 @@ class AssignAmbientRequest(BaseModel):
 
 @router.post("/{book}/chapters/{chapter_id}/ambient/assign")
 def assign_ambient(book: str, chapter_id: int, body: AssignAmbientRequest,
-                   db: Session = Depends(get_db)):
+                   db: Session = Depends(get_db), db_book: Book = Depends(get_owned_book)):
     """Download a Freesound preview and assign it to all scenes of a chapter."""
-    db_book = db.query(Book).filter(Book.slug == book).first()
-    if not db_book:
-        raise HTTPException(404, "Book not found")
-
     db_chapter = db.query(Chapter).filter(
         Chapter.book_id    == db_book.id,
         Chapter.chapter_id == chapter_id,
@@ -431,12 +423,8 @@ class AssignSceneAmbientRequest(BaseModel):
 
 @router.post("/scenes/{scene_id}/ambient/assign")
 def assign_scene_ambient(scene_id: int, body: AssignSceneAmbientRequest,
-                         db: Session = Depends(get_db)):
+                         db: Session = Depends(get_db), scene: Scene = Depends(get_owned_scene)):
     """Download a Freesound preview and assign it to a specific scene."""
-    scene = db.query(Scene).filter(Scene.id == scene_id).first()
-    if not scene:
-        raise HTTPException(404, "Scene not found")
-
     dest      = AMBIENT_CACHE / f"{body.sound_id}.mp3"
     sound_url = f"/ambient-files/{body.sound_id}.mp3"
     if not dest.exists():

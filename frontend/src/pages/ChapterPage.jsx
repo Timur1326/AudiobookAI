@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from "react";
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams, useNavigate, Navigate } from "react-router-dom";
 import { Spin, Typography, Slider, Button, Tooltip, message, Tag } from "antd";
 import {
   ArrowLeftOutlined, LeftOutlined, RightOutlined,
@@ -8,6 +8,7 @@ import {
   BulbOutlined, BulbFilled,
 } from "@ant-design/icons";
 import { getChapterReader, getBook, getAudioUrl, getAmbientConfig, BASE_URL } from "../api/client";
+import { isLoggedIn } from "../auth";
 
 const { Title, Text } = Typography;
 
@@ -80,6 +81,8 @@ export default function ChapterPage() {
   // ── Load data ────────────────────────────────────────────────────────────────
 
   useEffect(() => {
+    if (!isLoggedIn()) { setLoading(false); return; }
+
     setLoading(true);
     setPlaying(false);
     setCurrentTime(0);
@@ -262,6 +265,8 @@ export default function ChapterPage() {
   }, [togglePlay, seek, currentTime]);
 
   // ── Render ───────────────────────────────────────────────────────────────────
+
+  if (!isLoggedIn()) return <Navigate to="/auth" replace />;
 
   if (loading) return (
     <div style={{ textAlign: "center", paddingTop: 120 }}><Spin size="large" /></div>

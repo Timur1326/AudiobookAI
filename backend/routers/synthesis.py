@@ -9,6 +9,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backend.auth import get_owned_book
 from backend.database import get_db
 from backend.models import Book, Chapter, PipelineStep, StepStatus
 
@@ -25,12 +26,9 @@ class SynthesizeRequest(BaseModel):
 # ── POST /books/{book}/synthesize ─────────────────────────────────────────────
 
 @router.post("/{book}/synthesize")
-def synthesize(book: str, body: SynthesizeRequest, db: Session = Depends(get_db)):
+def synthesize(book: str, body: SynthesizeRequest, db: Session = Depends(get_db),
+               db_book: Book = Depends(get_owned_book)):
     """Synthesize a chapter to MP3 and track status in DB."""
-    db_book = db.query(Book).filter(Book.slug == book).first()
-    if not db_book:
-        raise HTTPException(status_code=404, detail=f"Book '{book}' not found")
-
     db_chapter = db.query(Chapter).filter(
         Chapter.book_id == db_book.id,
         Chapter.chapter_id == body.chapter_id,
@@ -87,7 +85,8 @@ def synthesize(book: str, body: SynthesizeRequest, db: Session = Depends(get_db)
 # ── GET /books/{book}/chapters/{chapter_id}/timestamps ───────────────────────
 
 @router.get("/{book}/chapters/{chapter_id}/timestamps")
-def get_timestamps(book: str, chapter_id: int, engine: str = "elevenlabs"):
+def get_timestamps(book: str, chapter_id: int, engine: str = "elevenlabs",
+                   db_book: Book = Depends(get_owned_book)):
     """Return per-paragraph timestamps for a synthesized chapter.
     If timestamps file is missing but segment files exist, rebuilds it on the fly.
     """
@@ -107,18 +106,17 @@ def get_timestamps(book: str, chapter_id: int, engine: str = "elevenlabs"):
 # ── GET /books/{book}/audio/{chapter_id} ──────────────────────────────────────
 
 @router.get("/{book}/audio/{chapter_id}")
-def get_audio(book: str, chapter_id: int, engine: str = "elevenlabs", db: Session = Depends(get_db)):
+def get_audio(book: str, chapter_id: int, engine: str = "elevenlabs", db: Session = Depends(get_db),
+              db_book: Book = Depends(get_owned_book)):
     """Download synthesized chapter MP3."""
-    db_book = db.query(Book).filter(Book.slug == book).first()
-    if db_book:
-        db_chapter = db.query(Chapter).filter(
-            Chapter.book_id == db_book.id,
-            Chapter.chapter_id == chapter_id,
-        ).first()
-        if db_chapter and db_chapter.audio_path:
-            path = Path(db_chapter.audio_path)
-            if path.exists():
-                return FileResponse(str(path), media_type="audio/mpeg", filename=path.name)
+    db_chapter = db.query(Chapter).filter(
+        Chapter.book_id == db_book.id,
+        Chapter.chapter_id == chapter_id,
+    ).first()
+    if db_chapter and db_chapter.audio_path:
+        path = Path(db_chapter.audio_path)
+        if path.exists():
+            return FileResponse(str(path), media_type="audio/mpeg", filename=path.name)
 
     # Fallback: derive path from convention
     path = STORAGE_DIR / book / "audio" / engine / f"chapter_{chapter_id:02d}.mp3"

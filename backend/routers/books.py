@@ -8,7 +8,7 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy.orm import Session
 
-from backend.auth import get_current_user_optional
+from backend.auth import get_current_user, get_owned_book
 from backend.database import get_db
 from backend.models import Book, Chapter, Paragraph, ParagraphTimestamp, PipelineStep, StepStatus, User
 
@@ -67,12 +67,12 @@ def _detect_step_statuses(slug: str, db: Session) -> None:
 # ── GET /books ────────────────────────────────────────────────────────────────
 
 @router.get("/")
-def list_books(db: Session = Depends(get_db), current_user: User | None = Depends(get_current_user_optional)):
-    """List books for the current user (or all books if not authenticated)."""
-    q = db.query(Book).order_by(Book.created_at.desc())
-    if current_user:
-        q = q.filter(Book.user_id == current_user.id)
-    books = q.all()
+def list_books(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """List books belonging to the current user."""
+    books = (db.query(Book)
+               .filter(Book.user_id == current_user.id)
+               .order_by(Book.created_at.desc())
+               .all())
 
     result = []
     for book in books:
@@ -94,7 +94,7 @@ def list_books(db: Session = Depends(get_db), current_user: User | None = Depend
 
 @router.post("/upload")
 async def upload_book(file: UploadFile = File(...), db: Session = Depends(get_db),
-                      current_user: User | None = Depends(get_current_user_optional)):
+                      current_user: User = Depends(get_current_user)):
     """Upload an EPUB file, parse it, and register in DB."""
     if not file.filename.endswith(".epub"):
         raise HTTPException(status_code=400, detail="Only EPUB files are supported")
@@ -123,7 +123,7 @@ async def upload_book(file: UploadFile = File(...), db: Session = Depends(get_db
         title=b.title,
         author=getattr(b, "author", ""),
         epub_path=str(epub_path),
-        user_id=current_user.id if current_user else None,
+        user_id=current_user.id,
     )
     db.add(book)
     db.flush()  # get book.id
@@ -160,12 +160,8 @@ async def upload_book(file: UploadFile = File(...), db: Session = Depends(get_db
 # ── GET /books/{book} ─────────────────────────────────────────────────────────
 
 @router.get("/{book}")
-def get_book(book: str, db: Session = Depends(get_db)):
+def get_book(book: str, db: Session = Depends(get_db), db_book: Book = Depends(get_owned_book)):
     """Get book metadata, chapter list, and pipeline status."""
-    db_book = db.query(Book).filter(Book.slug == book).first()
-    if not db_book:
-        raise HTTPException(status_code=404, detail=f"Book '{book}' not found")
-
     # Auto-detect statuses from files (for existing books)
     _detect_step_statuses(book, db)
     db.refresh(db_book)
@@ -206,7 +202,7 @@ def get_book(book: str, db: Session = Depends(get_db)):
 # ── GET /books/{book}/cover ───────────────────────────────────────────────────
 
 @router.get("/{book}/cover")
-def get_book_cover(book: str, db: Session = Depends(get_db)):
+def get_book_cover(book: str, db_book: Book = Depends(get_owned_book)):
     """Return the cover image for a book. Extracts it on first request if missing."""
     from fastapi.responses import FileResponse
     book_dir = STORAGE_DIR / book
@@ -218,8 +214,7 @@ def get_book_cover(book: str, db: Session = Depends(get_db)):
             return FileResponse(str(cover))
 
     # Try to extract from epub
-    db_book = db.query(Book).filter(Book.slug == book).first()
-    if db_book and db_book.epub_path:
+    if db_book.epub_path:
         try:
             from core.parser.epub_parser import extract_cover
             result = extract_cover(db_book.epub_path, str(book_dir))
@@ -234,12 +229,8 @@ def get_book_cover(book: str, db: Session = Depends(get_db)):
 # ── DELETE /books/{book} ──────────────────────────────────────────────────────
 
 @router.delete("/{book}")
-def delete_book(book: str, db: Session = Depends(get_db)):
+def delete_book(book: str, db: Session = Depends(get_db), db_book: Book = Depends(get_owned_book)):
     """Delete a book and all its files."""
-    db_book = db.query(Book).filter(Book.slug == book).first()
-    if not db_book:
-        raise HTTPException(status_code=404, detail=f"Book '{book}' not found")
-
     book_dir = STORAGE_DIR / book
     if book_dir.exists():
         shutil.rmtree(book_dir)
@@ -254,15 +245,11 @@ def delete_book(book: str, db: Session = Depends(get_db)):
 
 @router.get("/{book}/chapters/{chapter_id}/reader")
 def get_chapter_reader(book: str, chapter_id: int, engine: str = "elevenlabs",
-                       db: Session = Depends(get_db)):
+                       db: Session = Depends(get_db), db_book: Book = Depends(get_owned_book)):
     """
     Return paragraphs with timestamps from the database.
     Falls back to JSON files if paragraphs are not yet migrated.
     """
-    db_book = db.query(Book).filter(Book.slug == book).first()
-    if not db_book:
-        raise HTTPException(404, f"Book '{book}' not found")
-
     db_chapter = db.query(Chapter).filter(
         Chapter.book_id == db_book.id,
         Chapter.chapter_id == chapter_id,

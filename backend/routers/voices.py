@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+from backend.auth import get_owned_book
 from backend.database import get_db
 from backend.models import Book, Character, CharacterAlias
 
@@ -15,20 +16,11 @@ router = APIRouter()
 STORAGE_DIR = Path("storage/uploads")
 
 
-def get_book_or_404(slug: str, db: Session) -> Book:
-    """Return the Book for the given slug or raise HTTP 404."""
-    book = db.query(Book).filter(Book.slug == slug).first()
-    if not book:
-        raise HTTPException(status_code=404, detail=f"Book '{slug}' not found")
-    return book
-
-
 # ── GET /books/{book}/characters ──────────────────────────────────────────────
 
 @router.get("/{book}/characters")
-def get_characters(book: str, db: Session = Depends(get_db)):
+def get_characters(book: str, db: Session = Depends(get_db), db_book: Book = Depends(get_owned_book)):
     """Get all characters for a book from DB."""
-    db_book = get_book_or_404(book, db)
     characters = (db.query(Character)
                     .filter(Character.book_id == db_book.id)
                     .order_by(Character.name)
@@ -57,10 +49,8 @@ def get_characters(book: str, db: Session = Depends(get_db)):
 # ── POST /books/{book}/characters/import ──────────────────────────────────────
 
 @router.post("/{book}/characters/import")
-def import_characters(book: str, db: Session = Depends(get_db)):
+def import_characters(book: str, db: Session = Depends(get_db), db_book: Book = Depends(get_owned_book)):
     """Import characters from characters.json into DB (run after pipeline step 5)."""
-    db_book = get_book_or_404(book, db)
-
     path = STORAGE_DIR / book / "characters.json"
     if not path.exists():
         raise HTTPException(
@@ -126,10 +116,9 @@ def update_character_voice(
     char_id: int,
     body: VoiceUpdate,
     db: Session = Depends(get_db),
+    db_book: Book = Depends(get_owned_book),
 ):
     """Update the assigned voice for a character."""
-    db_book = get_book_or_404(book, db)
-
     char = db.query(Character).filter(
         Character.id == char_id,
         Character.book_id == db_book.id,
@@ -147,7 +136,7 @@ def update_character_voice(
 # ── GET /books/{book}/voices ──────────────────────────────────────────────────
 
 @router.get("/{book}/voices")
-def list_voices(book: str, engine: str = "elevenlabs"):
+def list_voices(book: str, engine: str = "elevenlabs", db_book: Book = Depends(get_owned_book)):
     """List available TTS voices for an engine."""
     if engine == "elevenlabs":
         from core.tts.elevenlabs_tts import ElevenLabsTTS
@@ -169,7 +158,8 @@ class PreviewRequest(BaseModel):
 
 
 @router.post("/{book}/preview-voice")
-def preview_voice(book: str, body: PreviewRequest, db: Session = Depends(get_db)):
+def preview_voice(book: str, body: PreviewRequest, db: Session = Depends(get_db),
+                  db_book: Book = Depends(get_owned_book)):
     """Synthesize a short text sample and return audio bytes."""
     import tempfile, os
     from fastapi.responses import Response
@@ -186,7 +176,6 @@ def preview_voice(book: str, body: PreviewRequest, db: Session = Depends(get_db)
     # Apply character voice settings if char_id provided and engine is elevenlabs
     voice_settings = None
     if body.char_id and body.engine == "elevenlabs":
-        db_book = get_book_or_404(book, db)
         char = db.query(Character).filter(
             Character.id == body.char_id,
             Character.book_id == db_book.id,

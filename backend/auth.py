@@ -59,14 +59,40 @@ def get_current_user(
     return user
 
 
-def get_current_user_optional(
-    credentials: HTTPAuthorizationCredentials = Depends(bearer),
+def get_owned_book(
+    book: str,
     db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
 ):
-    """Same as get_current_user but returns None instead of raising 401."""
-    if not credentials:
-        return None
-    try:
-        return get_current_user(credentials, db)
-    except HTTPException:
-        return None
+    """FastAPI dependency — returns the Book with slug `book` if it belongs to the caller.
+
+    Raises 404 both when the book doesn't exist and when it belongs to someone else,
+    so ownership can't be probed by guessing slugs. Use in any endpoint under
+    /books/{book}/... that reads or mutates a specific book's data.
+    """
+    from backend.models import Book
+
+    db_book = db.query(Book).filter(Book.slug == book, Book.user_id == current_user.id).first()
+    if not db_book:
+        raise HTTPException(status_code=404, detail=f"Book '{book}' not found")
+    return db_book
+
+
+def get_owned_scene(
+    scene_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(get_current_user),
+):
+    """FastAPI dependency — returns the Scene with id `scene_id` if its book belongs to the caller."""
+    from backend.models import Book, Chapter, Scene
+
+    scene = (
+        db.query(Scene)
+        .join(Chapter, Scene.chapter_id == Chapter.id)
+        .join(Book, Chapter.book_id == Book.id)
+        .filter(Scene.id == scene_id, Book.user_id == current_user.id)
+        .first()
+    )
+    if not scene:
+        raise HTTPException(status_code=404, detail=f"Scene {scene_id} not found")
+    return scene
