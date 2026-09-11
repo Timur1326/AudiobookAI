@@ -19,7 +19,6 @@ export const uploadBook    = (file)                       => {
 export const deleteBook    = (book)                      => api.delete(`/books/${book}`);
 export const getBook       = (book)                       => api.get(`/books/${book}`);
 export const getCharacters        = (book)                      => api.get(`/books/${book}/characters`);
-export const importCharacters     = (book)                      => api.post(`/books/${book}/characters/import`);
 export const updateCharacterVoice = (book, charId, voice_id, engine) =>
   api.put(`/books/${book}/characters/${charId}/voice`, { voice_id, engine });
 export const listVoices           = (book, engine)              => api.get(`/books/${book}/voices?engine=${engine}`);

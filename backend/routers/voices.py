@@ -1,6 +1,5 @@
 """Voices router: manage character voice assignments and preview TTS voices."""
 
-import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -9,11 +8,9 @@ from sqlalchemy.orm import Session
 
 from backend.auth import get_owned_book
 from backend.database import get_db
-from backend.models import Book, Character, CharacterAlias
+from backend.models import Book, Character
 
 router = APIRouter()
-
-STORAGE_DIR = Path("storage/uploads")
 
 
 # ── GET /books/{book}/characters ──────────────────────────────────────────────
@@ -44,63 +41,6 @@ def get_characters(book: str, db: Session = Depends(get_db), db_book: Book = Dep
             for c in characters
         ]
     }
-
-
-# ── POST /books/{book}/characters/import ──────────────────────────────────────
-
-@router.post("/{book}/characters/import")
-def import_characters(book: str, db: Session = Depends(get_db), db_book: Book = Depends(get_owned_book)):
-    """Import characters from characters.json into DB (run after pipeline step 5)."""
-    path = STORAGE_DIR / book / "characters.json"
-    if not path.exists():
-        raise HTTPException(
-            status_code=404,
-            detail="characters.json not found. Run character extraction first (step 5)."
-        )
-
-    with open(path, encoding="utf-8") as f:
-        raw = json.load(f)
-
-    # characters.json can be a list or {"characters": [...]}
-    chars_data = raw if isinstance(raw, list) else raw.get("characters", raw)
-
-    # Delete existing characters for this book
-    db.query(Character).filter(Character.book_id == db_book.id).delete()
-
-    imported = []
-    for c in chars_data:
-        name = c.get("name") or c.get("character")
-        if not name:
-            continue
-
-        # Pick a sample dialogue line for preview
-        sample = c.get("sample_text") or c.get("sample") or c.get("example_dialogue")
-        if not sample and c.get("dialogues"):
-            sample = c["dialogues"][0]
-
-        aliases = c.get("aliases", [])
-
-        char = Character(
-            book_id=db_book.id,
-            name=name,
-            gender=c.get("gender"),
-            age=c.get("age"),
-            personality=c.get("personality"),
-            accent=c.get("accent"),
-            voice_desc=c.get("voice_description") or c.get("voice_desc"),
-            sample_text=sample,
-            voice_id=c.get("voice_id"),
-            engine=c.get("engine"),
-        )
-        db.add(char)
-        db.flush()  # get char.id
-        for alias in aliases:
-            if alias and alias.strip():
-                db.add(CharacterAlias(character_id=char.id, alias=alias.strip()))
-        imported.append(name)
-
-    db.commit()
-    return {"ok": True, "imported": len(imported), "characters": imported}
 
 
 # ── PUT /books/{book}/characters/{char_id}/voice ──────────────────────────────

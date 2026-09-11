@@ -91,66 +91,6 @@ def get_voice(speaker: str | None, voice_map: dict, narrator_voice: str) -> str:
 
 
 
-def build_timestamps_from_segments(book: str, chapter_id: int, engine: str) -> Path | None:
-    """
-    Reconstruct timestamps from already-synthesized segment files.
-    Used for chapters synthesized before timestamps were introduced.
-    """
-    book_dir   = STORAGE_DIR / book
-    seg_dir    = book_dir / "audio" / engine / f"chapter_{chapter_id:02d}"
-    ts_path    = book_dir / "audio" / engine / f"chapter_{chapter_id:02d}_timestamps.json"
-
-    if not seg_dir.exists():
-        return None
-
-    # Load source data to get paragraph types for pause calculation
-    for name in ("parsed_with_scenes.json", "ground_truth_fixed.json", "parsed_final.json"):
-        src = book_dir / name
-        if src.exists():
-            data = _load_json(src)
-            break
-    else:
-        return None
-
-    chapters = data["chapters"]
-    ch = next((c for c in chapters if c["id"] == chapter_id), None)
-    if ch is None:
-        return None
-
-    if "paragraphs" in ch:
-        paragraphs = ch["paragraphs"]
-    else:
-        paragraphs = [p for scene in ch.get("scenes", []) for p in scene["paragraphs"]]
-
-    segs = sorted(seg_dir.glob("*.mp3"), key=lambda p: int(p.stem))
-    if not segs:
-        return None
-
-    timestamps = []
-    cursor_ms  = 0
-
-    for idx, seg in enumerate(segs):
-        para_idx = int(seg.stem)
-        audio    = AudioSegment.from_mp3(seg)
-        start_ms = cursor_ms
-        end_ms   = cursor_ms + len(audio)
-        timestamps.append({"index": para_idx, "start": start_ms / 1000, "end": end_ms / 1000})
-        cursor_ms = end_ms
-
-        if idx < len(segs) - 1:
-            curr_type = paragraphs[para_idx]["type"] if para_idx < len(paragraphs) else "narration"
-            next_idx  = int(segs[idx + 1].stem)
-            next_type = paragraphs[next_idx]["type"] if next_idx < len(paragraphs) else "narration"
-            pause_ms  = PAUSE.get((curr_type, next_type), DEFAULT_PAUSE)
-            cursor_ms += pause_ms
-
-    with open(ts_path, "w", encoding="utf-8") as f:
-        json.dump(timestamps, f, indent=2)
-
-    return ts_path
-
-
-
 def _auto_build_xtts_map(book_slug: str, book_id: int, db, DBCharacter) -> None:
     """Build voice_map_xtts.json from DB characters + ElevenLabs preview downloads.
 

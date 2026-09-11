@@ -87,17 +87,10 @@ def synthesize(book: str, body: SynthesizeRequest, db: Session = Depends(get_db)
 @router.get("/{book}/chapters/{chapter_id}/timestamps")
 def get_timestamps(book: str, chapter_id: int, engine: str = "elevenlabs",
                    db_book: Book = Depends(get_owned_book)):
-    """Return per-paragraph timestamps for a synthesized chapter.
-    If timestamps file is missing but segment files exist, rebuilds it on the fly.
-    """
+    """Return per-paragraph timestamps for a synthesized chapter."""
     ts_path = STORAGE_DIR / book / "audio" / engine / f"chapter_{chapter_id:02d}_timestamps.json"
-
     if not ts_path.exists():
-        # Try to rebuild from existing segment files
-        import core.tts.synthesize_chapter as sc
-        result = sc.build_timestamps_from_segments(book, chapter_id, engine)
-        if not result:
-            raise HTTPException(status_code=404, detail="Timestamps not available — synthesize chapter first")
+        raise HTTPException(status_code=404, detail="Timestamps not available — synthesize chapter first")
 
     with open(ts_path, encoding="utf-8") as f:
         return json.load(f)

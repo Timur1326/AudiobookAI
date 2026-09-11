@@ -1,6 +1,5 @@
 """Books router: upload, list, inspect books and serve chapter content."""
 
-import json
 import shutil
 from datetime import datetime
 from pathlib import Path
@@ -16,52 +15,6 @@ router = APIRouter()
 
 STORAGE_DIR = Path("storage/uploads")
 TOTAL_STEPS = 7
-
-
-def load_json(path: Path) -> dict:
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
-
-
-def book_data(book_slug: str) -> dict:
-    """Load best available parsed JSON for a book."""
-    base = STORAGE_DIR / book_slug
-    for name in ("ground_truth_fixed.json", "parsed_with_scenes.json", "parsed_final.json", "parsed.json"):
-        p = base / name
-        if p.exists():
-            return load_json(p)
-    raise HTTPException(status_code=404, detail=f"No parsed data for book '{book_slug}'")
-
-
-def _detect_step_statuses(slug: str, db: Session) -> None:
-    """Infer step statuses from existing files (for books uploaded before DB)."""
-    base = STORAGE_DIR / slug
-    book = db.query(Book).filter(Book.slug == slug).first()
-    if not book:
-        return
-
-    file_checks = {
-        1: base / "parsed.json",
-        2: base / "parsed_final.json",
-        3: base / "parsed_final.json",
-        4: base / "parsed_with_scenes.json",
-        5: base / "characters.json",
-        6: base / "voice_map_elevenlabs.json",
-    }
-
-    for step_num in range(1, TOTAL_STEPS + 1):
-        step = db.query(PipelineStep).filter(
-            PipelineStep.book_id == book.id,
-            PipelineStep.step == step_num
-        ).first()
-        if not step:
-            continue
-        if step.status == StepStatus.pending and step_num in file_checks:
-            if file_checks[step_num].exists():
-                step.status = StepStatus.done
-                step.updated_at = datetime.utcnow()
-
-    db.commit()
 
 
 # ── GET /books ────────────────────────────────────────────────────────────────
@@ -162,10 +115,6 @@ async def upload_book(file: UploadFile = File(...), db: Session = Depends(get_db
 @router.get("/{book}")
 def get_book(book: str, db: Session = Depends(get_db), db_book: Book = Depends(get_owned_book)):
     """Get book metadata, chapter list, and pipeline status."""
-    # Auto-detect statuses from files (for existing books)
-    _detect_step_statuses(book, db)
-    db.refresh(db_book)
-
     steps = [
         {
             "step":       s.step,
@@ -246,10 +195,7 @@ def delete_book(book: str, db: Session = Depends(get_db), db_book: Book = Depend
 @router.get("/{book}/chapters/{chapter_id}/reader")
 def get_chapter_reader(book: str, chapter_id: int, engine: str = "elevenlabs",
                        db: Session = Depends(get_db), db_book: Book = Depends(get_owned_book)):
-    """
-    Return paragraphs with timestamps from the database.
-    Falls back to JSON files if paragraphs are not yet migrated.
-    """
+    """Return paragraphs with timestamps from the database."""
     db_chapter = db.query(Chapter).filter(
         Chapter.book_id == db_book.id,
         Chapter.chapter_id == chapter_id,
@@ -257,70 +203,30 @@ def get_chapter_reader(book: str, chapter_id: int, engine: str = "elevenlabs",
     if not db_chapter:
         raise HTTPException(404, f"Chapter {chapter_id} not found")
 
-    # Check if paragraphs are in DB
     db_paras = (db.query(Paragraph)
                   .filter(Paragraph.chapter_id == db_chapter.id)
                   .order_by(Paragraph.index)
                   .all())
+    if not db_paras:
+        raise HTTPException(404, f"No paragraphs found for chapter {chapter_id}")
 
-    if db_paras:
-        # Load timestamps from DB
-        para_ids = [p.id for p in db_paras]
-        ts_rows = (db.query(ParagraphTimestamp)
-                     .filter(ParagraphTimestamp.paragraph_id.in_(para_ids),
-                             ParagraphTimestamp.engine == engine)
-                     .all())
-        ts_by_para_id = {t.paragraph_id: t for t in ts_rows}
-
-        paras = []
-        for p in db_paras:
-            ts = ts_by_para_id.get(p.id)
-            paras.append({
-                "index":   p.index,
-                "text":    p.text,
-                "type":    p.type,
-                "speaker": p.speaker,
-                "start":   ts.start if ts else None,
-                "end":     ts.end   if ts else None,
-            })
-
-        return {"id": chapter_id, "title": db_chapter.title, "paragraphs": paras}
-
-    # Fallback: read from JSON files (not yet migrated)
-    base = STORAGE_DIR / book
-    split_data = book_data(book)
-    split_ch   = next((c for c in split_data["chapters"] if c["id"] == chapter_id), None)
-    if not split_ch:
-        raise HTTPException(404, f"Chapter {chapter_id} not found in JSON")
-
-    split_paras = (
-        split_ch["paragraphs"] if "paragraphs" in split_ch
-        else [p for s in split_ch.get("scenes", []) for p in s["paragraphs"]]
-    )
-    split_paras = [p for p in split_paras if p.get("text", "").strip()]
-
-    ts_path = base / "audio" / engine / f"chapter_{chapter_id:02d}_timestamps.json"
-    if not ts_path.exists():
-        import core.tts.synthesize_chapter as sc
-        sc.build_timestamps_from_segments(book, chapter_id, engine)
-
-    ts_by_idx = {}
-    if ts_path.exists():
-        ts_by_idx = {t["index"]: t for t in load_json(ts_path)}
+    para_ids = [p.id for p in db_paras]
+    ts_rows = (db.query(ParagraphTimestamp)
+                 .filter(ParagraphTimestamp.paragraph_id.in_(para_ids),
+                         ParagraphTimestamp.engine == engine)
+                 .all())
+    ts_by_para_id = {t.paragraph_id: t for t in ts_rows}
 
     paras = []
-    for i, p in enumerate(split_paras):
-        ts      = ts_by_idx.get(i, {})
-        speaker = (p.get("speaker_ground_truth")
-                   or p.get("speaker_llm_context")
-                   or p.get("speaker"))
+    for p in db_paras:
+        ts = ts_by_para_id.get(p.id)
         paras.append({
-            "index":   i,
-            "text":    p["text"],
-            "type":    p.get("type", "narration"),
-            "speaker": speaker,
-            "start":   ts.get("start"),
-            "end":     ts.get("end"),
+            "index":   p.index,
+            "text":    p.text,
+            "type":    p.type,
+            "speaker": p.speaker,
+            "start":   ts.start if ts else None,
+            "end":     ts.end   if ts else None,
         })
 
-    return {"id": chapter_id, "title": split_ch["title"], "paragraphs": paras}
+    return {"id": chapter_id, "title": db_chapter.title, "paragraphs": paras}
