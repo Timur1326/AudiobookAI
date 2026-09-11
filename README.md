@@ -14,6 +14,7 @@ A web application that converts EPUB books into multi-voice audiobooks using a 7
 6. [Running the Application](#running-the-application)
 7. [Quick Start](#quick-start)
 8. [Project Structure](#project-structure)
+9. [License](#license)
 
 ---
 
@@ -202,3 +203,9 @@ Audiobook/
 
 - The SQLite database (`audiobook.db`) and all generated audio files are created automatically in `storage/` on first run.
 - For XTTS local synthesis, a CUDA-capable GPU is strongly recommended; CPU synthesis works but is very slow.
+
+---
+
+## License
+
+MIT — see [LICENSE](LICENSE).
