@@ -7,21 +7,30 @@ A web application that converts EPUB books into multi-voice audiobooks using a 7
 ## Table of Contents
 
 1. [Overview](#overview)
-2. [Screenshots](#screenshots)
-3. [Pipeline](#pipeline)
-4. [Prerequisites](#prerequisites)
-5. [Installation](#installation)
-6. [Configuration](#configuration)
-7. [Running the Application](#running-the-application)
-8. [Quick Start](#quick-start)
-9. [Project Structure](#project-structure)
-10. [License](#license)
+2. [Demo Video](#demo-video)
+3. [Screenshots](#screenshots)
+4. [Pipeline](#pipeline)
+5. [Prerequisites](#prerequisites)
+6. [Installation](#installation)
+7. [Configuration](#configuration)
+8. [Running the Application](#running-the-application)
+9. [Quick Start](#quick-start)
+10. [Project Structure](#project-structure)
+11. [License](#license)
 
 ---
 
 ## Overview
 
 The application takes an EPUB file as input and produces a narrated audiobook where each character speaks in a distinct voice. All AI processing (dialogue detection, character extraction, speaker attribution, voice assignment) runs through the Anthropic Claude API. Audio synthesis is done via ElevenLabs cloud TTS or locally via XTTS v2 (Coqui TTS).
+
+---
+
+## Demo Video
+
+A 5-minute walkthrough of the pipeline, from EPUB upload to a finished multi-voice audiobook.
+
+https://github.com/user-attachments/assets/e5d88846-3566-4705-a53e-d9a4cad5db57
 
 ---
 
