@@ -7,7 +7,6 @@ from pathlib import Path
 
 import requests
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -295,13 +294,6 @@ def get_ambient(book: str, chapter_id: int, engine: str = "elevenlabs",
     }
 
 
-@router.get("/ambient-files/{filename}")
-def serve_ambient_file(filename: str):
-    """Serve a cached ambient sound file."""
-    path = AMBIENT_CACHE / filename
-    if not path.exists():
-        raise HTTPException(404, "Ambient file not found")
-    return FileResponse(str(path), media_type="audio/mpeg")
 
 
 # ── GET /books/{book}/ambient/search ─────────────────────────────────────────
