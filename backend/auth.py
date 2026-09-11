@@ -4,6 +4,7 @@ JWT authentication utilities.
 import os
 from datetime import datetime, timedelta
 
+from dotenv import load_dotenv
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError, jwt
@@ -12,7 +13,17 @@ from sqlalchemy.orm import Session
 
 from backend.database import get_db
 
-SECRET_KEY  = os.environ.get("SECRET_KEY", "change-me-in-production")
+load_dotenv()
+
+SECRET_KEY = os.environ.get("SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError(
+        "SECRET_KEY is not set. JWTs would otherwise be signed with a predictable "
+        "value, letting anyone forge a valid login token. Generate one with:\n"
+        '  python3 -c "import secrets; print(secrets.token_hex(32))"\n'
+        "and add it to .env as SECRET_KEY=<value>."
+    )
+
 ALGORITHM   = "HS256"
 TOKEN_TTL   = 60 * 24 * 7  # 7 days in minutes
 
